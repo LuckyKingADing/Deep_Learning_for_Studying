@@ -1,0 +1,76 @@
+[data]
+basefold = "/mnt/data/oss-byd-wl-roadtest/users/localization/evaluation/ota630_c80c32da/20260410/2026-04-10_14-58-57"
+reffile = "/mnt/data/oss-byd-wl-roadtest/users/localization/split_data/split_data_dir/pvtrtk_nocamera/20260410/ref_02.txt"
+lcver = "pvtlc_c80c32da"
+tcver = "rtklc_c80c32da"
+dataset = ""
+dt = 0.0
+gnss_subdir = "topic_parse"
+gnss_filename = "pvt.csv"
+gnss_pos_index_1 = 2
+gnss_pos_index_2 = 3
+gnss_pos_index_3 = 4
+lc_label = "pvtlc"
+tc_label = "rtklc"
+gnss_label = "pvt"
+
+[plot]
+plotlc = true
+plottc = true
+plotgnssstat = true
+
+[evaluation]
+tthreshod = 0.001
+horizontal_only = 0
+
+[detail_plot]
+horizontal_error_threshold_meters = 10.0
+vertical_error_threshold_meters = 15.0
+detail_window_seconds = 25.0
+
+[clip_plot]
+saveclip = 1
+horizontal_error_threshold_meters = 10.0
+vertical_error_threshold_meters = 15.0
+clip_plot_interval_seconds = 50.0
+
+[normal_scene_exclusions]
+lc_tc_exclude = [ "隧道",]
+gnss_exclude = [ "隧道", "转发器",]
+
+[output]
+output_dir = "/mnt/data/oss-byd-wl-roadtest/users/localization/evaluation/ota630_c80c32da/20260410/2026-04-10_14-58-57"
+
+[advanced]
+reftype = 1
+statetype = 1
+
+[time_ranges]
+[[time_ranges.type_config]]
+type_label = "All"
+type_time_range = [ [ -1, -1,],]
+
+[[time_ranges.type_config]]
+type_label = "开阔场景"
+type_time_range = [ [ 452556, 453880,], [ 454435, 454575,], [ 454999, 455075,], [ 455160, 455410,], [ 456060, 456300,], [ 456315, 456610,], [ 457075, 457130,], [ 457965, 458085,], [ 458200, 458270,], [ 459750, 460096,], [ 460370, 460730,], [ 461120, 461235,], [ 474473, 475560,], [ 475900, 476042,], [ 476205, 476440,], [ 476650, 476880,], [ 476965, 477077,], [ 477100, 477200,], [ 477815, 477940,], [ 478475, 478650,], [ 480390, 480860,], [ 481000, 481300,], [ 481430, 481740,], [ 481925, 482185,], [ 482420, 482535,], [ 482565, 482998,],]
+
+[[time_ranges.type_config]]
+type_label = "半遮挡"
+type_time_range = [ [ 453880, 453925,], [ 454360, 454435,], [ 454937, 454999,], [ 455075, 455160,], [ 456300, 456315,], [ 456610, 456850,], [ 456940, 457075,], [ 457130, 457440,], [ 457440, 457520,], [ 458085, 458200,], [ 459270, 459750,], [ 460260, 460370,], [ 475750, 475900,], [ 476500, 476615,], [ 476880, 476965,], [ 477077, 477100,], [ 477650, 477815,], [ 477940, 478040,], [ 479410, 480300,], [ 480325, 480390,], [ 480860, 481000,], [ 481300, 481430,], [ 481740, 481925,], [ 482185, 482420,],]
+
+[[time_ranges.type_config]]
+type_label = "双边遮挡"
+type_time_range = [ [ 454325, 454360,], [ 454705, 454725,], [ 454848, 454865,], [ 454883, 454893,], [ 456850, 456940,], [ 457520, 457965,], [ 458270, 459270,], [ 460730, 461120,], [ 475560, 475750,], [ 476042, 476205,], [ 476440, 476500,], [ 476615, 476650,], [ 477200, 477650,], [ 478040, 478475,], [ 478650, 479035,],]
+
+[[time_ranges.type_config]]
+type_label = "隧道"
+type_time_range = [ [ 453925, 454325,], [ 454575, 454705,], [ 454725, 454848,], [ 454865, 454883,], [ 454893, 454937,], [ 455410, 456010,], [ 456010, 456060,], [ 479035, 479410,], [ 480300, 480325,], [ 482535, 482565,],]
+
+[[time_ranges.type_config]]
+type_label = "转发器"
+type_time_range = [ [ 460096, 460260,],]
+
+[[time_ranges.type_config]]
+type_label = "卫导异常排除"
+type_time_range = [ [ 455015.4, 455015.6,], [ 455379.1, 455379.3,],]
+

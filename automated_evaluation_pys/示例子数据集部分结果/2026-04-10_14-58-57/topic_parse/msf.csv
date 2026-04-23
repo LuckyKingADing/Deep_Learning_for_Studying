@@ -1,0 +1,1 @@
+pub_time,measure_time,lat_mars,lon_mars,height,vel_e,vel_n,vel_u,bias_acc_x,bias_acc_y,bias_acc_z,bias_gyro_x,bias_gyro_y,bias_gyro_z,heading,fusion_status,sequence_num

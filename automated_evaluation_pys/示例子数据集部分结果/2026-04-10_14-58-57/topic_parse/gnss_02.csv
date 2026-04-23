@@ -1,0 +1,1 @@
+pub_time,measure_time,lat,lon,height,vel_e,vel_n,vel_u,heading,num_sats,rtk_status,sequence_num
