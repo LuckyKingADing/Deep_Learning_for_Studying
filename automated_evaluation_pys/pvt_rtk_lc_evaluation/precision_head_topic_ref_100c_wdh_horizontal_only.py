@@ -1,0 +1,1644 @@
+"""
+基于head topic和参考数据的精度评估脚本（水平精度专用版本）
+对应MATLAB文件: precision_head_topic_ref_100c_wdh.m
+
+功能:
+- 读取LC数据 (tcmsf_sol.csv)
+- 读取TC数据 (tcmsf_sol_msf.csv)
+- 读取GNSS数据 (gnss.csv)
+- 读取参考数据 (ref_02.txt)
+- 进行时间对齐
+- 计算误差
+- 输出统计结果
+- 绘制误差曲线
+
+水平精度专用模式:
+- 当配置项horizontal_only=1时，所有的统计和绘图只保留水平位置误差
+- 包括子图也只处理水平误差
+"""
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
+import os
+import sys
+import warnings
+warnings.filterwarnings('ignore')
+
+
+# 导入现有的数据读取函数
+import sys
+import os
+
+# 添加父目录到Python路径，以便导入commons模块
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+commons_dir = os.path.join(parent_dir, 'commons')
+
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
+
+# 从commons模块导入
+import utils
+import fileutils
+from commons.outpre_new import outpre_new
+from commons.plot_errors import plot_errors
+from commons.calculate_errors import calculate_errors
+from commons.evaluation_utils import (
+    load_config_from_toml,
+    process_sensor_data,
+    calculate_normal_scene_time_ranges,
+    calculate_horizontal_velocity_stats,
+    save_horizontal_velocity_stats
+)
+
+
+def plot_detail_subplots_horizontal_only(
+    common_timelc, diff_datalc, common_timetc, diff_datatc, 
+    common_timegnss, diff_datagnss, t0, yaw, 
+    horizontal_threshold_meters, detail_window_seconds, 
+    output_dir, type_label, lcver='LC', tcver='TC',
+    plotlc=True, plottc=True
+):
+    """
+    绘制水平误差大于阈值的详细子图（仅水平精度专用模式）
+    
+    Args:
+        common_timelc: LC时间向量
+        diff_datalc: LC差值数据
+        common_timetc: TC时间向量
+        diff_datatc: TC差值数据
+        common_timegnss: GNSS时间向量
+        diff_datagnss: GNSS差值数据
+        t0: 时间基准点
+        yaw: 航向角数据
+        horizontal_threshold_meters: 水平误差阈值（米）
+        detail_window_seconds: 子图时间窗口（秒）
+        output_dir: 输出目录
+        type_label: 类型标签
+        lcver: LC版本标识
+        tcver: TC版本标识
+    """
+    print(f"\n开始绘制水平误差详细子图（水平精度专用模式）...")
+    print(f"  水平误差阈值: {horizontal_threshold_meters}米")
+    print(f"  时间窗口: ±{detail_window_seconds}秒")
+    print(f"  仅关注水平位置误差")
+    
+    # 创建details目录
+    details_dir = os.path.join(output_dir, 'details')
+    os.makedirs(details_dir, exist_ok=True)
+    print(f"  详细子图保存目录: {details_dir}")
+    
+    # 收集所有数据的时间点和水平误差
+    all_times = []
+    all_horizontal_errors = []
+    
+    # 处理LC数据
+    if common_timelc is not None and diff_datalc is not None and len(common_timelc) > 0:
+        lc_horizontal, lc_lateral, _, _ = calculate_errors(diff_datalc, yaw)
+        lc_horizontal_error = np.sqrt(lc_horizontal**2 + lc_lateral**2)
+        all_times.extend(common_timelc)
+        all_horizontal_errors.extend(lc_horizontal_error)
+    
+    # 处理TC数据
+    if common_timetc is not None and diff_datatc is not None and len(common_timetc) > 0:
+        tc_horizontal, tc_lateral, _, _ = calculate_errors(diff_datatc, yaw)
+        tc_horizontal_error = np.sqrt(tc_horizontal**2 + tc_lateral**2)
+        all_times.extend(common_timetc)
+        all_horizontal_errors.extend(tc_horizontal_error)
+    
+    # 处理GNSS数据
+    if common_timegnss is not None and diff_datagnss is not None and len(common_timegnss) > 0:
+        gnss_horizontal, gnss_lateral, _, _ = calculate_errors(diff_datagnss, yaw)
+        gnss_horizontal_error = np.sqrt(gnss_horizontal**2 + gnss_lateral**2)
+        all_times.extend(common_timegnss)
+        all_horizontal_errors.extend(gnss_horizontal_error)
+    
+    if len(all_times) == 0:
+        print("  没有可用的数据，跳过子图绘制")
+        return
+    
+    # 转换为numpy数组
+    all_times = np.array(all_times)
+    all_horizontal_errors = np.array(all_horizontal_errors)
+    
+    # 循环查找超过阈值的极值点
+    excluded_ranges = []  # 已处理的范围
+    subplot_count = 0
+    
+    while True:
+        # 在已处理范围外的数据中查找水平误差最大值
+        mask = np.ones(len(all_times), dtype=bool)
+        
+        # 排除已处理的范围
+        for (range_start, range_end) in excluded_ranges:
+            mask &= ((all_times < range_start) | (all_times > range_end))
+        
+        # 筛选出范围外的数据
+        filtered_times = all_times[mask]
+        filtered_horizontal_errors = all_horizontal_errors[mask]
+        
+        if len(filtered_times) == 0:
+            break  # 没有更多数据需要处理
+        
+        # 找到水平误差最大值
+        max_horizontal_error = np.max(filtered_horizontal_errors)
+        max_horizontal_idx = np.argmax(filtered_horizontal_errors)
+        
+        # 检查是否超过水平误差阈值
+        horizontal_exceeds = max_horizontal_error > horizontal_threshold_meters
+        
+        if not horizontal_exceeds:
+            print(f"  剩余数据: 水平误差{max_horizontal_error:.2f}米")
+            print(f"  未超过阈值（水平{horizontal_threshold_meters}米），停止绘制子图")
+            break
+        
+        max_error_idx = max_horizontal_idx
+        error_type = 'horizontal'
+        error_value = max_horizontal_error
+        
+        max_error_time = filtered_times[max_error_idx]
+        
+        error_text = '水平误差'
+        print(f"  发现超过阈值的极值点: 时间={max_error_time:.2f}s, {error_text}={error_value:.2f}米")
+        
+        # 确定子图的时间范围
+        subplot_start = max_error_time - detail_window_seconds
+        subplot_end = max_error_time + detail_window_seconds
+        
+        # 将此范围添加到已处理列表
+        excluded_ranges.append((subplot_start, subplot_end))
+        
+        # 绘制子图
+        subplot_count += 1
+        save_path = os.path.join(
+            details_dir, 
+            f'detail_subplot_type_{type_label}_peak_{subplot_count}_t{max_error_time:.0f}_{error_type}_{error_value:.1f}m.png'
+        )
+        
+        # 调用plot_errors函数，但只绘制这个时间范围内的数据
+        plot_errors(
+            common_timelc, diff_datalc, 
+            common_timetc, diff_datatc, 
+            common_timegnss, diff_datagnss, 
+            t0, save_path, yaw, 
+            t_start=[subplot_start], t_end=[subplot_end],
+            lcver=lcver, tcver=tcver, is_detail=True,
+            plotlc=plotlc, plottc=plottc
+        )
+        
+        print(f"  已保存子图 {subplot_count}: {os.path.basename(save_path)}")
+    
+    print(f"  共绘制 {subplot_count} 个详细子图")
+
+
+def save_and_plot_clips_horizontal_only(
+    gnss, diff_datagnss, common_timegnss, yaw, 
+    horizontal_threshold_meters, clip_interval_seconds, 
+    output_dir, t0, gnss_time_mapping,gnssstdindex0
+):
+    """
+    保存和绘制GNSS clip数据（水平精度专用模式）
+    
+    Args:
+        gnss: GNSS原始数据（包含14,15,16列的std）
+        diff_datagnss: GNSS差值数据
+        common_timegnss: GNSS公共时间点
+        yaw: 航向角数据
+        horizontal_threshold_meters: 水平误差阈值（米）
+        clip_interval_seconds: clip子图时间间隔（秒）
+        output_dir: 输出目录
+        t0: 时间基准点
+        gnss_time_mapping: GPS周内秒到Unix时间戳的映射字典
+    """
+    print(f"\n{'='*60}")
+    print("开始处理GNSS Clip数据（水平精度专用模式）")
+    print(f"{'='*60}")
+    print(f"  水平误差阈值: {horizontal_threshold_meters}米")
+    print(f"  子图时间间隔: {clip_interval_seconds}秒")
+    print(f"  仅关注水平位置误差")
+    
+    # 计算GNSS水平误差
+    gnss_horizontal, gnss_lateral, _, _ = calculate_errors(diff_datagnss, yaw)
+    gnss_horizontal_error = np.sqrt(gnss_horizontal**2 + gnss_lateral**2)
+    
+    # 筛选超过水平误差阈值的数据点
+    horizontal_exceeds = gnss_horizontal_error > horizontal_threshold_meters
+    exceed_indices = np.where(horizontal_exceeds)[0]
+    
+    if len(exceed_indices) == 0:
+        print("  没有数据超过水平误差阈值，跳过clip处理")
+        return
+    
+    print(f"  超过水平误差阈值的数据点数: {len(exceed_indices)}")
+    
+    # 创建clip目录
+    clip_dir = os.path.join(output_dir, 'clip')
+    os.makedirs(clip_dir, exist_ok=True)
+    print(f"  Clip数据保存目录: {clip_dir}")
+    
+    # 根据超过阈值的数据点，提取连续的数据段
+    clip_segments = []
+    current_segment = []
+    
+    for i in range(len(exceed_indices)):
+        idx = exceed_indices[i]
+        
+        if len(current_segment) == 0:
+            current_segment.append(idx)
+        else:
+            # 检查是否连续（时间间隔小于1秒）
+            prev_idx = current_segment[-1]
+            if common_timegnss[idx] - common_timegnss[prev_idx] < 1.0:
+                current_segment.append(idx)
+            else:
+                # 保存当前段，开始新段
+                if len(current_segment) > 0:
+                    clip_segments.append(current_segment)
+                current_segment = [idx]
+    
+    # 保存最后一段
+    if len(current_segment) > 0:
+        clip_segments.append(current_segment)
+    
+    print(f"  识别到 {len(clip_segments)} 个数据段")
+    
+    # 保存原始数据段
+    clip_data_file = os.path.join(clip_dir, 'gnss_clip_raw_data.csv')
+    
+    # 收集所有clip段的原始数据
+    all_clip_raw_data = []
+    for seg_idx, segment in enumerate(clip_segments):
+        # 获取这个段的时间范围
+        seg_start_idx = segment[0]
+        seg_end_idx = segment[-1]
+        seg_start_time = common_timegnss[seg_start_idx]
+        seg_end_time = common_timegnss[seg_end_idx]
+        
+        # 在原始gnss数据中找到对应的索引
+        mask = (gnss[:, 0] >= seg_start_time) & (gnss[:, 0] <= seg_end_time)
+        segment_raw_data = gnss[mask, :]
+        
+        # 添加段标识
+        num_rows = segment_raw_data.shape[0]
+        segment_col = np.full((num_rows, 1), seg_idx)
+        
+        # 添加时间列（使用GPS周内秒到Unix时间戳的映射）
+        # segment_raw_data[i, 0]是GPS周内秒，需要映射到Unix时间戳
+        original_times = []
+        for i in range(num_rows):
+            gps_week_seconds = segment_raw_data[i, 0]  # GPS周内秒
+            # 从映射字典中获取对应的Unix时间戳
+            unix_timestamp = gnss_time_mapping.get(gps_week_seconds, gps_week_seconds)
+            original_times.append([unix_timestamp])
+        
+        time_col = np.array(original_times)
+        
+        # 将段标识和时间列都添加到原始数据中
+        segment_raw_data = np.hstack([segment_raw_data, segment_col, time_col])
+        
+        all_clip_raw_data.append(segment_raw_data)
+        print(f"  段 {seg_idx}: 时间 {seg_start_time:.2f}s ~ {seg_end_time:.2f}s, 数据点数 {num_rows}")
+    
+    # 合并所有段并保存
+    if len(all_clip_raw_data) > 0:
+        all_clip_raw_data = np.vstack(all_clip_raw_data)
+        
+        # 定义每列的格式
+        num_cols = all_clip_raw_data.shape[1]
+        fmt_list = []
+        for col_idx in range(num_cols):
+            if col_idx == 0 or col_idx == num_cols - 1:  # 首列和最后一列（原始时间）保留3位小数
+                fmt_list.append('%.3f')
+            elif col_idx == 7 or col_idx == 8:  # 第8-9列（经纬度，索引7-8）保留8位小数
+                fmt_list.append('%.8f')
+            else:  # 其他列保留6位小数
+                fmt_list.append('%.6f')
+        
+        np.savetxt(clip_data_file, all_clip_raw_data, delimiter=',', fmt=fmt_list)
+        print(f"  原始数据已保存到: {clip_data_file}")
+        print(f"  输出格式: 第1列和最后一列（时间）3位小数，第8-9列8位小数，其他列6位小数")
+        print(f"  最后一列为原始时间，与原gnsspath对应文件的首列时间相同")
+    
+    # 绘制clip子图（为每个包含超出阈值数据的50s窗口绘制子图）
+    print(f"\n开始绘制clip子图...")
+    
+    clip_subplot_count = 0
+    gnssstdindex = [gnssstdindex0,gnssstdindex0 + 1,gnssstdindex0 + 2]
+    
+    # 为每个clip段绘制子图
+    for seg_idx, segment in enumerate(clip_segments):
+        # 获取这个段的时间范围
+        seg_start_idx = segment[0]
+        seg_end_idx = segment[-1]
+        seg_start_time = common_timegnss[seg_start_idx]
+        seg_end_time = common_timegnss[seg_end_idx] + 0.1 #避免只有1个点不绘制
+        
+        # 计算需要多少个50s窗口来覆盖这个段
+        seg_duration = seg_end_time - seg_start_time
+        num_windows = int(np.ceil(seg_duration / clip_interval_seconds))
+        
+        print(f"  段 {seg_idx}: 时间 {seg_start_time:.2f}s ~ {seg_end_time:.2f}s, 时长 {seg_duration:.2f}s, 需要 {num_windows} 个子图")
+        
+        # 为这个段绘制多个50s子图
+        for window_idx in range(num_windows):
+            window_start = seg_start_time + window_idx * clip_interval_seconds
+            window_end = min(window_start + clip_interval_seconds, seg_end_time)
+            
+            # 筛选这个窗口范围内的数据
+            mask = (common_timegnss >= window_start) & (common_timegnss < window_end)
+            subplot_time = common_timegnss[mask]
+            subplot_horizontal_error = gnss_horizontal_error[mask]
+            
+            if len(subplot_time) == 0:
+                continue
+            
+            # 获取std数据（从gnss原始数据中提取14,15,16列）
+            mask_raw = (gnss[:, 0] >= window_start) & (gnss[:, 0] < window_end)
+            subplot_std_x = gnss[mask_raw, gnssstdindex[0]] 
+            subplot_std_y = gnss[mask_raw, gnssstdindex[1]] 
+            subplot_std_z = gnss[mask_raw, gnssstdindex[2]] 
+            subplot_3d_std = np.sqrt(subplot_std_x**2 + subplot_std_y**2 + subplot_std_z**2)
+            
+            subplot_horizontal_std = np.sqrt(subplot_std_x**2 + subplot_std_y**2)
+            
+            # 绘制子图（单图，包含水平误差和std）
+            clip_subplot_count += 1
+            fig, ax = plt.subplots(figsize=(14, 7))
+            
+            # 绘制水平位置误差（点和线）
+            ax.plot(subplot_time, subplot_horizontal_error, 'b-o', linewidth=2.0, markersize=4, label='Horizontal Position Error', alpha=0.8)
+            # 绘制水平位置误差的std（点和线）
+            ax.plot(subplot_time, subplot_horizontal_std, 'r-s', linewidth=2.0, markersize=4, label='Horizontal Position Std', alpha=0.8)
+            
+            ax.set_xlabel('Time (s)', fontsize=13)
+            ax.set_ylabel('Error/Std (m)', fontsize=13)
+            duration = window_end - window_start
+            ax.set_title(f'Clip Segment {seg_idx}, Window {window_idx+1}/{num_windows} ({duration:.2f}s)', 
+                        fontsize=15, fontweight='bold')
+            ax.grid(True, alpha=0.3)
+            ax.legend(fontsize=12, loc='upper right')
+            
+            # 设置横轴显示完整时间，不使用科学计数法或缩写
+            ax.xaxis.set_major_formatter(ticker.ScalarFormatter(useOffset=False, useMathText=False))
+            ax.ticklabel_format(style='plain', axis='x')
+            
+            plt.tight_layout()
+            
+            save_path = os.path.join(clip_dir, f'clip_subplot_seg{seg_idx}_win{window_idx}.png')
+            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            plt.close()
+            
+            print(f"    已保存子图: {os.path.basename(save_path)}")
+    
+    print(f"  共绘制 {clip_subplot_count} 个clip子图")
+    
+    # 绘制总图（时间归一化）
+    print(f"\n绘制GNSS水平误差总图...")
+    
+    # 获取所有GNSS数据的std（根据common_timegnss从原始gnss数据中提取）
+    gnss_std_x = np.zeros(len(common_timegnss))
+    gnss_std_y = np.zeros(len(common_timegnss))
+    gnss_std_z = np.zeros(len(common_timegnss))
+    
+    for i, t in enumerate(common_timegnss):
+        # 在原始gnss数据中找到最接近的时间点
+        idx = np.argmin(np.abs(gnss[:, 0] - t))
+        gnss_std_x[i] = gnss[idx, gnssstdindex[0]]
+        gnss_std_y[i] = gnss[idx, gnssstdindex[1]]
+        gnss_std_z[i] = gnss[idx, gnssstdindex[2]]
+    
+    gnss_3d_std = np.sqrt(gnss_std_x**2 + gnss_std_y**2 + gnss_std_z**2)
+    gnss_horizontal_std = np.sqrt(gnss_std_x**2 + gnss_std_y**2)
+    
+    # 时间归一化（减去起点）
+    normalized_time = common_timegnss - t0
+    
+    # 绘制总图
+    fig, ax = plt.subplots(figsize=(16, 8))
+    
+    ax.plot(normalized_time, gnss_horizontal_error, 'b-', linewidth=1.5, label='Horizontal Position Error', alpha=0.8)
+    ax.plot(normalized_time, gnss_horizontal_std, 'r-', linewidth=1.5, label='Horizontal Position Std', alpha=0.8)
+    
+    ax.axhline(y=horizontal_threshold_meters, color='orange', linestyle='--', 
+               label=f'Horizontal Threshold ({horizontal_threshold_meters}m)', alpha=0.6)
+    
+    ax.set_xlabel('Relative Time (s)', fontsize=14)
+    ax.set_ylabel('Error (m)', fontsize=14)
+    ax.set_title('GNSS Horizontal Position Error and Std', fontsize=16, fontweight='bold')
+    
+    # 添加时间起点备注
+    ax.text(0.02, 0.98, f'Time Axis Start (t0): {t0:.2f} s', 
+            transform=ax.transAxes, fontsize=12, verticalalignment='top',
+            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+    
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=12, loc='upper right')
+    
+    plt.tight_layout()
+    
+    save_path = os.path.join(clip_dir, 'gnss_horizontal_error_and_std_overview.png')
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    
+    print(f"  总图已保存到: {os.path.basename(save_path)}")
+    
+    # 绘制GNSS全部误差图（不包含std）
+    print(f"\n绘制GNSS全部误差图（不包含std）...")
+    
+    # 时间归一化（减去起点）
+    normalized_time = common_timegnss - t0
+    
+    # 绘制新图（只包含误差，不包含std）
+    fig, ax = plt.subplots(figsize=(16, 8))
+    
+    # 绘制水平位置误差（点和线）
+    ax.plot(normalized_time, gnss_horizontal_error, 'b-o', linewidth=1.5, markersize=2, 
+           label='Horizontal Position Error', alpha=0.8)
+    
+    ax.axhline(y=horizontal_threshold_meters, color='orange', linestyle='--', 
+               label=f'Horizontal Threshold ({horizontal_threshold_meters}m)', alpha=0.6)
+    
+    ax.set_xlabel('Relative Time (s)', fontsize=14)
+    ax.set_ylabel('Error (m)', fontsize=14)
+    ax.set_title('GNSS Horizontal Position Error (No Std)', fontsize=16, fontweight='bold')
+    
+    # 添加时间起点备注
+    ax.text(0.02, 0.98, f'Time Axis Start (t0): {t0:.2f} s', 
+            transform=ax.transAxes, fontsize=12, verticalalignment='top',
+            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+    
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=12, loc='upper right')
+    
+    plt.tight_layout()
+    
+    save_path_new = os.path.join(clip_dir, 'gnss_horizontal_error_only_no_std.png')
+    plt.savefig(save_path_new, dpi=150, bbox_inches='tight')
+    plt.close()
+    
+    print(f"  全部误差图（无std）已保存到: {os.path.basename(save_path_new)}")
+    print(f"\nClip处理完成!")
+
+
+def outpre_unified_table_horizontal_only(outfile, all_type_stats, t0=0, lcver='LC', tcver='TC'):
+    """
+    输出统一表格格式的统计结果（水平精度专用模式）
+    :param outfile: 输出文件路径
+    :param all_type_stats: 所有场景的统计结果列表
+    :param t0: 绘图的时间基准点（绘图的时间起点值）
+    :param lcver: LC版本标识
+    :param tcver: TC版本标识
+    """
+    # 固定的场景输出顺序（不含Normal，Normal根据表格类型动态添加）
+    SCENE_ORDER_BASE = ['All', '开阔场景', '半遮挡', '双边遮挡', '隧道', '转发器']
+
+    # 标签转换函数：将英文标签转换为中文
+    def convert_label_to_chinese(label):
+        if label.lower() == 'all':
+            return '全部'
+        if 'Normal' in label:
+            return '正常'
+        return label
+
+    # 根据表格类型获取场景顺序
+    def get_scene_order_for_table(table_type):
+        normal_key = f'Normal_{table_type}'
+        return ['All', normal_key] + SCENE_ORDER_BASE[1:]
+
+    # 将统计列表转换为字典，方便查找
+    stats_dict = {stats.get('type_label', 'Unknown'): stats for stats in all_type_stats}
+
+    with open(outfile, 'w', encoding='utf-8') as fid:
+        fid.write('='*100 + '\n')
+        fid.write('所有场景水平精度统计结果汇总 (Horizontal Precision Statistics Summary)\n')
+        fid.write('='*100 + '\n\n')
+        fid.write(f'LC版本: {lcver}\n')
+        fid.write(f'TC版本: {tcver}\n')
+        fid.write(f'绘图时间基准点 (Plot Time Reference Point): t0 = {t0:.2f} 秒\n')
+        fid.write('注：所有误差曲线图的时间轴均以t0为起点，即图中的0秒对应实际时间的{:.2f}秒\n\n'.format(t0))
+        fid.write('⚠️  水平精度专用模式：仅统计和展示水平方向误差（包括横向、前进方向、水平位置误差），不包含高程误差\n\n')
+
+        # 写入LC统计表格
+        fid.write(f'{lcver} Statistics ({lcver}水平精度统计)\n')
+        fid.write('-'*100 + '\n')
+
+        # 表头 - 场景类型左对齐，数值列右对齐（无高程误差V部分）
+        header = f"{'场景类型':<12}{'里程km':>10}"
+        header += f"{'H-rms':>8}{'H-CEP95':>8}{'H-CEP99':>8}{'H-max':>8}"
+        header += f"{'L-rms':>8}{'L-CEP95':>8}{'L-CEP99':>8}{'L-max':>8}"
+        header += f"{'F-rms':>8}{'F-CEP95':>8}{'F-CEP99':>8}{'F-max':>8}"
+        fid.write(header + '\n')
+        fid.write('-'*100 + '\n')
+
+        # LC表格只输出Normal_LC
+        scene_order_lc = get_scene_order_for_table('LC')
+        for scene_label in scene_order_lc:
+            stats = stats_dict.get(scene_label)
+            if stats:
+                lc = stats.get('lc', {})
+                display_label = convert_label_to_chinese(scene_label)
+                row = f"{display_label:<12}{lc.get('odom', 0):>10.2f}"
+                row += f"{lc.get('horizontal_rms', 0):>8.2f}{lc.get('horizontal_cep95', 0):>8.2f}{lc.get('horizontal_cep99', 0):>8.2f}{lc.get('horizontal_max', 0):>8.2f}"
+                row += f"{lc.get('lateral_rms', 0):>8.2f}{lc.get('lateral_cep95', 0):>8.2f}{lc.get('lateral_cep99', 0):>8.2f}{lc.get('lateral_max', 0):>8.2f}"
+                row += f"{lc.get('forward_rms', 0):>8.2f}{lc.get('forward_cep95', 0):>8.2f}{lc.get('forward_cep99', 0):>8.2f}{lc.get('forward_max', 0):>8.2f}"
+                fid.write(row + '\n')
+            else:
+                # 该场景不存在，输出0值
+                display_label = convert_label_to_chinese(scene_label)
+                row = f"{display_label:<12}{'0.00':>10}"
+                row += f"{'0.00':>8}{'0.00':>8}{'0.00':>8}{'0.00':>8}"
+                row += f"{'0.00':>8}{'0.00':>8}{'0.00':>8}{'0.00':>8}"
+                row += f"{'0.00':>8}{'0.00':>8}{'0.00':>8}{'0.00':>8}"
+                fid.write(row + '\n')
+
+        fid.write('\n')
+
+        # 写入TC统计表格
+        fid.write(f'{tcver} Statistics ({tcver}水平精度统计)\n')
+        fid.write('-'*100 + '\n')
+        fid.write(header + '\n')
+        fid.write('-'*100 + '\n')
+
+        # TC表格只输出Normal_TC
+        scene_order_tc = get_scene_order_for_table('TC')
+        for scene_label in scene_order_tc:
+            stats = stats_dict.get(scene_label)
+            if stats:
+                tc = stats.get('tc', {})
+                display_label = convert_label_to_chinese(scene_label)
+                row = f"{display_label:<12}{tc.get('odom', 0):>10.2f}"
+                row += f"{tc.get('horizontal_rms', 0):>8.2f}{tc.get('horizontal_cep95', 0):>8.2f}{tc.get('horizontal_cep99', 0):>8.2f}{tc.get('horizontal_max', 0):>8.2f}"
+                row += f"{tc.get('lateral_rms', 0):>8.2f}{tc.get('lateral_cep95', 0):>8.2f}{tc.get('lateral_cep99', 0):>8.2f}{tc.get('lateral_max', 0):>8.2f}"
+                row += f"{tc.get('forward_rms', 0):>8.2f}{tc.get('forward_cep95', 0):>8.2f}{tc.get('forward_cep99', 0):>8.2f}{tc.get('forward_max', 0):>8.2f}"
+                fid.write(row + '\n')
+            else:
+                display_label = convert_label_to_chinese(scene_label)
+                row = f"{display_label:<12}{'0.00':>10}"
+                row += f"{'0.00':>8}{'0.00':>8}{'0.00':>8}{'0.00':>8}"
+                row += f"{'0.00':>8}{'0.00':>8}{'0.00':>8}{'0.00':>8}"
+                row += f"{'0.00':>8}{'0.00':>8}{'0.00':>8}{'0.00':>8}"
+                fid.write(row + '\n')
+
+        fid.write('\n')
+
+        # 写入GNSS统计表格
+        fid.write('GNSS Statistics (GNSS水平精度统计)\n')
+        fid.write('-'*100 + '\n')
+        fid.write(header + '\n')
+        fid.write('-'*100 + '\n')
+
+        # GNSS表格只输出Normal_GNSS
+        scene_order_gnss = get_scene_order_for_table('GNSS')
+        for scene_label in scene_order_gnss:
+            stats = stats_dict.get(scene_label)
+            if stats:
+                gnss = stats.get('gnss', {})
+                display_label = convert_label_to_chinese(scene_label)
+                row = f"{display_label:<12}{gnss.get('odom', 0):>10.2f}"
+                row += f"{gnss.get('horizontal_rms', 0):>8.2f}{gnss.get('horizontal_cep95', 0):>8.2f}{gnss.get('horizontal_cep99', 0):>8.2f}{gnss.get('horizontal_max', 0):>8.2f}"
+                row += f"{gnss.get('lateral_rms', 0):>8.2f}{gnss.get('lateral_cep95', 0):>8.2f}{gnss.get('lateral_cep99', 0):>8.2f}{gnss.get('lateral_max', 0):>8.2f}"
+                row += f"{gnss.get('forward_rms', 0):>8.2f}{gnss.get('forward_cep95', 0):>8.2f}{gnss.get('forward_cep99', 0):>8.2f}{gnss.get('forward_max', 0):>8.2f}"
+                fid.write(row + '\n')
+            else:
+                display_label = convert_label_to_chinese(scene_label)
+                row = f"{display_label:<12}{'0.00':>10}"
+                row += f"{'0.00':>8}{'0.00':>8}{'0.00':>8}{'0.00':>8}"
+                row += f"{'0.00':>8}{'0.00':>8}{'0.00':>8}{'0.00':>8}"
+                row += f"{'0.00':>8}{'0.00':>8}{'0.00':>8}{'0.00':>8}"
+                fid.write(row + '\n')
+
+        fid.write('\n')
+        fid.write('='*100 + '\n')
+        fid.write('说明 (Notes):\n')
+        fid.write('  L = Lateral (横向误差)\n')
+        fid.write('  F = Forward (前进方向误差)\n')
+        fid.write('  H = Horizontal (水平位置误差，横向和前进方向的合成)\n')
+        fid.write('  rms = Root Mean Square (均方根)\n')
+        fid.write('  CEP95 = 95% Circular Error Probable (95%圆误差概率)\n')
+        fid.write('  CEP99 = 99% Circular Error Probable (99%圆误差概率)\n')
+        fid.write('  max = Maximum Error (最大误差)\n')
+        fid.write('  ⚠️  本模式为水平精度专用，不包含高程误差（Vertical）\n')
+        fid.write('='*100 + '\n')
+
+    print(f"水平精度专用模式的统计结果已保存到: {outfile}")
+
+
+
+def precision_head_topic_ref_100c_wdh_horizontal_only(
+    basefold, 
+    reffile, 
+    lcver='', 
+    tcver='', 
+    dataset='', 
+    dt=0,
+    plotlc=True,
+    plottc=False,
+    plotgnssstat=True,
+    tthreshod=5e-3,
+    output_dir=None,
+    reftype=0,
+    statetype=0,
+    config=None
+):
+    """
+    主评估函数（水平精度专用模式）
+    
+    Args:
+        basefold: 基础目录
+        reffile: 参考数据文件路径
+        lcver: LC版本
+        tcver: TC版本
+        dataset: 数据集名称
+        dt: 时间偏移
+        plotlc: 是否绘制LC数据
+        plottc: 是否绘制TC数据
+        plotgnssstat: 是否绘制GNSS数据
+        tthreshod: 时间阈值
+        output_dir: 输出目录（默认为basefold）
+        reftype: 参考真值的数据类型 0-2504月采集的真值 1-后续wdh处理的真值
+        statetype: 状态文件的类型 0-tcmsf_sol.csv 1-msf_debug_state.csv
+        config: TOML配置文件加载的配置字典（可选）
+    """
+    print(f"\n{'='*60}")
+    print("Head Topic 精度评估（水平精度专用模式）")
+    print(f"{'='*60}\n")
+    
+    # 从配置中读取是否为水平精度专用模式
+    horizontal_only = config.get('evaluation', {}).get('horizontal_only', 1) if config else 1
+    print(f"水平精度专用模式: {horizontal_only}")
+    
+    if horizontal_only != 1:
+        print("警告：当前脚本为水平精度专用版本，但配置项horizontal_only不为1")
+        print("建议使用原始脚本 precision_head_topic_ref_100c_wdh.py")
+    
+    # 设置输出目录
+    if output_dir is None:
+        output_dir = basefold
+    
+    # 创建结果目录，如果seldataset不为空，则使用seldataset作为子目录
+    if dataset and dataset != "":
+        result_dir = os.path.join(output_dir, 'results', dataset)
+    else:
+        result_dir = os.path.join(output_dir, 'results')
+    
+    # 尝试创建结果目录 评估人，名额，标准，影响  加班，出差影响
+    try:
+        os.makedirs(result_dir, exist_ok=True)
+        print(f"结果目录: {result_dir}")
+    except OSError as e:
+        print(f"\n错误: 无法创建结果目录: {result_dir}")
+        print(f"错误详情: {e}")
+        print(f"\n可能的原因:")
+        print(f"  1. 路径 {basefold} 不存在或无法访问")
+        print(f"  2. 磁盘挂载问题（如Windows网络驱动器 /mnt/d/...）")
+        print(f"  3. 权限不足")
+        print(f"\n建议:")
+        print(f"  1. 检查配置文件中的 basefold 路径是否正确")
+        print(f"  2. 使用本地可访问的路径")
+        print(f"  3. 在配置文件中设置 output_dir 指定本地输出目录")
+        raise
+        
+    tcmsfname = 'tcmsf_sol.csv'
+    if statetype:
+        tcmsfname = 'msf_debug_state.csv'
+    
+    # 设置文件路径
+    tcmsffold = basefold
+    lcpath = os.path.join(tcmsffold, dataset, lcver, tcmsfname)
+    tcpath = os.path.join(tcmsffold, dataset, tcver, tcmsfname)
+    
+    # 从配置文件读取GNSS路径配置
+    gnss_subdir = config.get('data', {}).get('gnss_subdir', 'topic_parse')
+    gnss_filename = config.get('data', {}).get('gnss_filename', 'pvt.csv')
+    gnsspath = os.path.join(basefold, dataset, gnss_subdir, gnss_filename)
+    
+    # 从配置文件读取数据源标识符
+    lc_label = config.get('data', {}).get('lc_label', 'LC')
+    tc_label = config.get('data', {}).get('tc_label', 'TC')
+    gnss_label = config.get('data', {}).get('gnss_label', 'GNSS')
+    
+    outfile = os.path.join(tcmsffold, 'precison_statistics.txt')
+    
+    # 读取参考数据
+    print(f"读取参考数据: {reffile}")
+    if reftype:
+        # 读取列: [0:time, 6:lat, 7:lon, 5:height, 15:ve, 14:vn, 16:vu, 2:roll, 3:pitch, 4:yaw, -1:quality]
+        # ref数据中14,15,16对应NEU速度，调整为15,14后存储后的索引4,5,6对应ENU速度
+        refdata = fileutils.readfullcsv(reffile,[0,6,7,5,15,14,16,2,3,4,-1])
+    else:
+        refdata = []
+    
+    pos0 = refdata[0, 7:9].copy()
+    refdata[:, 7:9] = utils.dpos2den(refdata[:, 7:9],pos0)
+    
+    print(f"  数据维度: {refdata.shape}")
+    print(f"  时间范围: {refdata[0, 0]:.2f}s ~ {refdata[-1, 0]:.2f}s")
+    
+    # 新增：为 LC 和 TC 分别准备参考数据
+    refdata_lc = refdata.copy()  # 默认使用原始参考数据
+    refdata_tc = refdata.copy()  # 默认使用原始参考数据
+    ref_filename = os.path.basename(reffile)
+    
+    # 只有当 reffile 是 *_84.txt 格式时，才考虑使用 *_02.txt
+    if ref_filename.endswith('_84.txt'):
+        ref_dir = os.path.dirname(reffile)
+        ref_filename_02 = ref_filename.replace('_84.txt', '_02.txt')
+        reffile_02 = os.path.join(ref_dir, ref_filename_02)
+        
+        # 检查 *_02.txt 是否存在
+        if os.path.exists(reffile_02):
+            print(f"\n检测到 WGS84 参考文件: {reffile}")
+            print(f"找到对应的 GCJ-02 参考文件: {reffile_02}")
+            
+            # 读取 GCJ-02 参考数据
+            refdata_02 = fileutils.readfullcsv(reffile_02, [0,6,7,5,15,14,16,2,3,4,-1])
+            refdata_02[:, 7:9] = utils.dpos2den(refdata_02[:, 7:9], pos0)
+            print(f"  GCJ-02 参考数据维度: {refdata_02.shape}")
+            print(f"  GCJ-02 参考数据时间范围: {refdata_02[0, 0]:.2f}s ~ {refdata_02[-1, 0]:.2f}s")
+            
+            # 判断 LC 是否使用 GCJ-02 参考数据
+            lc_use_gcj02 = lcver and 'pvt' not in lcver.lower()
+            if lc_use_gcj02:
+                print(f"\nLC 评估:")
+                print(f"  lcver = '{lcver}' (不包含 'pvt')")
+                print(f"  将使用 GCJ-02 参考数据评估 LC")
+                refdata_lc = refdata_02
+            else:
+                print(f"\nLC 评估:")
+                print(f"  lcver = '{lcver}' (包含 'pvt' 或为空)")
+                print(f"  将使用 WGS84 参考数据评估 LC")
+            
+            # 判断 TC 是否使用 GCJ-02 参考数据
+            tc_use_gcj02 = tcver and 'pvt' not in tcver.lower()
+            if tc_use_gcj02:
+                print(f"\nTC 评估:")
+                print(f"  tcver = '{tcver}' (不包含 'pvt')")
+                print(f"  将使用 GCJ-02 参考数据评估 TC")
+                refdata_tc = refdata_02
+            else:
+                print(f"\nTC 评估:")
+                print(f"  tcver = '{tcver}' (包含 'pvt' 或为空)")
+                print(f"  将使用 WGS84 参考数据评估 TC")
+            
+            print(f"\nGNSS 评估:")
+            print(f"  将使用 WGS84 参考数据评估 GNSS\n")
+        else:
+            print(f"\n检测到 WGS84 参考文件: {reffile}")
+            print(f"警告: 未找到对应的 GCJ-02 参考文件: {reffile_02}")
+            print(f"LC、TC 和 GNSS 都将使用 WGS84 参考数据\n")
+    else:
+        print(f"\n参考文件: {reffile}（非 WGS84 格式）")
+        print(f"LC、TC 和 GNSS 都将使用该参考数据\n")
+    
+    # 读取LC数据
+    lcs = None
+    diff_datalc = None
+    common_timelc = None
+    if plotlc:
+        lcs, diff_datalc, common_timelc = process_sensor_data(
+            lcpath, refdata_lc, pos0, tthreshod, statetype, dt, lcver)
+    
+    # 读取TC数据
+    tcs = None
+    diff_datatc = None
+    common_timetc = None
+    if plottc:
+        tcs, diff_datatc, common_timetc = process_sensor_data(
+            tcpath, refdata_tc, pos0, tthreshod, statetype, dt, tcver)
+    
+    # 读取GNSS数据
+    gnss = None
+    gnss0 = None  # 原始GNSS数据（未筛选）
+    gnss_raw_time = None  # 原始时间列（从gnsspath文件首列）
+    diff_datagnss = None
+    common_timegnss = None
+    
+    if plotgnssstat:
+        print(f"\n读取GNSS数据: {gnsspath}")
+        if os.path.exists(gnsspath):
+            
+            # 首先读取原始时间列（gnsspath文件的首列：Unix时间戳）
+            # 同时读取第1列（GPS周内秒），用于建立映射关系
+            gnss_raw_data = fileutils.readfullcsv(gnsspath, [0, 1], [])
+            gnss_unix_time = gnss_raw_data[:, 0]  # Unix时间戳
+            gnss_week_seconds = gnss_raw_data[:, 1]  # GPS周内秒
+            print(f"  原始时间列点数: {len(gnss_unix_time)}")
+            print(f"  Unix时间范围: {gnss_unix_time[0]:.2f} ~ {gnss_unix_time[-1]:.2f}")
+            print(f"  GPS周内秒范围: {gnss_week_seconds[0]:.2f}s ~ {gnss_week_seconds[-1]:.2f}s")
+            
+            # 建立GPS周内秒到Unix时间戳的映射
+            gnss_time_mapping = {}
+            for i in range(len(gnss_week_seconds)):
+                gnss_time_mapping[gnss_week_seconds[i]] = gnss_unix_time[i]
+            
+            # 从配置文件读取GNSS位置索引
+            gnss_pos_index_1 = config.get('data', {}).get('gnss_pos_index_1', 2)
+            gnss_pos_index_2 = config.get('data', {}).get('gnss_pos_index_2', 3)
+            gnss_pos_index_3 = config.get('data', {}).get('gnss_pos_index_3', 4)
+            
+            # 构建gnssindex数组，使用配置文件中的位置索引
+            gnssindex = [1,-1,-1,8,5,6,7,gnss_pos_index_1,gnss_pos_index_2,gnss_pos_index_3,10]
+            extindex = [14,15,16,9,10]
+            gnssstdindex0 = len(gnssindex)
+            gnss0 = fileutils.readfullcsv(gnsspath,gnssindex,extindex)
+            mask_negative = gnss0[:,3] > 180
+            gnss0[mask_negative, 3] = gnss0[mask_negative, 3] - 360
+            
+            # 筛选GNSS数据：只保留状态大于0的数据
+            if gnss0.shape[1] >= 12:
+                ind = np.where(gnss0[:, -1] > 0)[0]
+                gnss = gnss0[ind, :]
+                print(f"  筛选后数据维度: {gnss.shape}")
+                print(f"  时间范围: {gnss[0, 0]:.2f}s ~ {gnss[-1, 0]:.2f}s")
+                
+                # 坐标转换
+                gnss[:, 7:9] = utils.dpos2den(gnss[:, 7:9],pos0)
+                
+                # 时间对齐
+                print("\n进行GNSS时间对齐...")
+                
+                aligned_data1, aligned_data2, common_timegnss,idxgnss = utils.alignDataByTimeTcSol(
+                    gnss, gnss[:, 0], refdata, refdata[:, 0], 1e-3, 1)
+                diff_datagnss = utils.calculateDifference(aligned_data1, aligned_data2)
+                
+                print(f"  对齐后数据点数: {len(common_timegnss)}")
+            else:
+                print(f"  警告: GNSS数据列数不足")
+        else:
+            print(f"  警告: GNSS文件不存在: {gnsspath}")
+    
+    if diff_datatc is None and diff_datalc is None and diff_datagnss is None:
+        return {
+            'lcs': lcs,
+            'tcs': tcs,
+            'gnss': gnss,
+            'refdata': refdata,
+            'diff_datalc': diff_datalc,
+            'diff_datatc': diff_datatc,
+            'diff_datagnss': diff_datagnss,
+            'common_timelc': common_timelc,
+            'common_timetc': common_timetc,
+            'common_timegnss': common_timegnss,
+            't0': 0,
+            't_start': 0,
+            't_end': 0
+        }
+    # 计算时间基准点
+    t0 = 0
+    if plottc and tcs is not None:
+        t0 = tcs[0, 0]
+    elif lcs is not None:
+        t0 = lcs[0, 0]
+    
+    # 提取航向角数据（使用 refdata_lc）
+    yaw = refdata_lc[:, [0, 3]] 
+    yaw[:,1] = -yaw[:,1]
+    
+    # 从配置文件读取时间范围配置
+    if config is None:
+        config = {}
+    time_ranges_config = config.get('time_ranges', {}).get('type_config', [])
+
+    # 收集需要完全排除的场景的时间范围（如"卫导异常排除"）
+    # 这些时间段的数据不参与统计、不参与绘图、不输出
+    exclude_time_ranges = []
+    exclude_scene_labels = []
+    for type_config in time_ranges_config:
+        type_label = type_config.get('type_label', '')
+        type_time_range = type_config.get('type_time_range', [])
+        # 检查场景标签是否包含"排除"关键字
+        if '排除' in type_label or '异常' in type_label:
+            # 处理-1值
+            for start, end in type_time_range:
+                if start == -1:
+                    start = refdata[0, 0] if refdata is not None and len(refdata) > 0 else 0
+                if end == -1:
+                    end = refdata[-1, 0] if refdata is not None and len(refdata) > 0 else 0
+                exclude_time_ranges.append([start, end])
+            exclude_scene_labels.append(type_label)
+            print(f"识别排除场景: '{type_label}'，时间段 {len(type_time_range)} 个，数据将完全跳过处理")
+
+    # 函数：从时间序列中排除指定时间段
+    def filter_excluded_time_ranges(time_data, diff_data, exclude_ranges):
+        """从数据中排除指定时间段"""
+        if len(exclude_ranges) == 0 or time_data is None or len(time_data) == 0:
+            return time_data, diff_data, np.ones(len(time_data), dtype=bool)  # 返回全True的mask表示无排除
+
+        mask = np.ones(len(time_data), dtype=bool)
+        for start, end in exclude_ranges:
+            mask &= ((time_data < start) | (time_data > end))
+
+        filtered_time = time_data[mask] if time_data is not None else None
+        filtered_diff = diff_data[mask] if diff_data is not None else None
+
+        return filtered_time, filtered_diff, mask
+
+    # 函数：从原始数据数组中排除指定时间段（根据时间列过滤）
+    def filter_raw_data_by_time(raw_data, exclude_ranges):
+        """从原始数据数组中排除指定时间段（时间列在索引0）"""
+        if len(exclude_ranges) == 0 or raw_data is None or len(raw_data) == 0:
+            return raw_data, np.ones(len(raw_data), dtype=bool)
+
+        mask = np.ones(len(raw_data), dtype=bool)
+        time_col = raw_data[:, 0]  # 时间列在第一列
+        for start, end in exclude_ranges:
+            mask &= ((time_col < start) | (time_col > end))
+
+        filtered_data = raw_data[mask] if raw_data is not None else None
+        return filtered_data, mask
+
+    # 如果有排除时间段，应用过滤
+    if len(exclude_time_ranges) > 0:
+        print(f"\n应用排除时间段过滤，共 {len(exclude_time_ranges)} 个时间段:")
+        for start, end in exclude_time_ranges:
+            print(f"  排除时间段: {start:.2f}s ~ {end:.2f}s")
+
+        # 对原始LC数据应用排除过滤
+        if lcs is not None and len(lcs) > 0:
+            lcs, mask_lcs_raw = filter_raw_data_by_time(lcs, exclude_time_ranges)
+            print(f"  原始LC数据排除后剩余点数: {len(lcs) if lcs is not None else 0}")
+
+        # 对原始TC数据应用排除过滤
+        if tcs is not None and len(tcs) > 0:
+            tcs, mask_tcs_raw = filter_raw_data_by_time(tcs, exclude_time_ranges)
+            print(f"  原始TC数据排除后剩余点数: {len(tcs) if tcs is not None else 0}")
+
+        # 对原始GNSS数据应用排除过滤
+        if gnss is not None and len(gnss) > 0:
+            gnss, mask_gnss_raw = filter_raw_data_by_time(gnss, exclude_time_ranges)
+            print(f"  原始GNSS数据排除后剩余点数: {len(gnss) if gnss is not None else 0}")
+
+        # 对LC、TC、GNSS数据应用排除过滤
+        if common_timelc is not None and diff_datalc is not None:
+            common_timelc, diff_datalc, mask_lc = filter_excluded_time_ranges(common_timelc, diff_datalc, exclude_time_ranges)
+            print(f"  LC对齐数据排除后剩余点数: {len(common_timelc) if common_timelc is not None else 0}")
+
+        if common_timetc is not None and diff_datatc is not None:
+            common_timetc, diff_datatc, mask_tc = filter_excluded_time_ranges(common_timetc, diff_datatc, exclude_time_ranges)
+            print(f"  TC对齐数据排除后剩余点数: {len(common_timetc) if common_timetc is not None else 0}")
+
+        if common_timegnss is not None and diff_datagnss is not None:
+            common_timegnss, diff_datagnss, mask_gnss = filter_excluded_time_ranges(common_timegnss, diff_datagnss, exclude_time_ranges)
+            print(f"  GNSS对齐数据排除后剩余点数: {len(common_timegnss) if common_timegnss is not None else 0}")
+
+    # 如果配置文件中没有时间范围配置，则使用旧的seldataset逻辑
+    if len(time_ranges_config) == 0:
+        print("\n警告: 配置文件中没有时间范围配置")
+    else:
+        # 使用新的TOML配置，循环处理所有type
+        print(f"\n从配置文件读取到 {len(time_ranges_config)} 个type的时间范围配置")
+        
+        # 创建统一的统计结果文件
+        outfile_unified = os.path.join(result_dir, 'position_precision.txt')
+        print(f"将创建水平精度专用模式的统计结果文件: {outfile_unified}")
+        
+        # 收集所有场景的统计结果
+        all_type_stats = []
+        
+        # 存储所有场景的时间范围（用于后续正常场景计算）
+        # 格式: {场景标签: [[start1, end1], [start2, end2], ...]}
+        all_scene_time_ranges = {}
+        
+        # 从配置文件读取正常场景需要排除的场景列表
+        lc_tc_exclude = config.get('normal_scene_exclusions', {}).get('lc_tc_exclude', [])
+        gnss_exclude = config.get('normal_scene_exclusions', {}).get('gnss_exclude', [])
+        
+        print(f"\n正常场景排除配置:")
+        print(f"  LC/TC排除场景: {lc_tc_exclude}")
+        print(f"  GNSS排除场景: {gnss_exclude}")
+        
+        for idx, type_config in enumerate(time_ranges_config):
+            type_label = type_config.get('type_label', str(idx))
+            type_time_range = type_config.get('type_time_range', [])
+
+            # 获取参考数据的起始和结束时间（用于处理-1替换）
+            if lcs is not None:
+                ref_start = lcs[0, 0]
+                ref_end = lcs[-1, 0]
+            elif tcs is not None:
+                ref_start = tcs[0, 0]
+                ref_end = tcs[-1, 0]
+            elif gnss is not None:
+                ref_start = gnss[0, 0]
+                ref_end = gnss[-1, 0]
+            else:
+                ref_start = 0
+                ref_end = 0
+
+            # 处理并保存当前场景的时间范围（将-1替换为实际值）
+            scene_time_ranges_processed = []
+            for start, end in type_time_range:
+                if start == -1:
+                    start = ref_start
+                if end == -1:
+                    end = ref_end
+                scene_time_ranges_processed.append([start, end])
+
+            # 保存到字典中（即使是被排除的场景也要保存，用于正常场景计算）
+            all_scene_time_ranges[type_label] = scene_time_ranges_processed
+
+            # 跳过排除场景（如"卫导异常排除"），不绘图、不统计、不输出
+            if type_label in exclude_scene_labels:
+                print(f"\n跳过排除场景: '{type_label}'（数据已过滤，不绘图、不统计、不输出）")
+                continue
+
+            # 如果该场景在排除列表中，打印提示
+            if type_label in lc_tc_exclude or type_label in gnss_exclude:
+                print(f"  场景 '{type_label}' 将在正常场景计算中被排除")
+                print(f"    时间范围: {scene_time_ranges_processed}")
+
+            print(f"\n{'='*60}")
+            print(f"处理 Type {type_label}")
+            print(f"{'='*60}")
+            
+            # 检查时间范围是否为空
+            if len(type_time_range) == 0:
+                print(f"  该场景无数据（type_time_range为空），统计值置0，跳过绘图")
+                
+                # 创建空统计结果（包含水平误差：横向、前进方向、水平位置误差）
+                empty_stats = {
+                    'type_label': type_label,
+                    'has_data': False,
+                    'lc': {
+                        'odom': 0,
+                        'lateral_rms': 0,
+                        'lateral_cep95': 0,
+                        'lateral_cep99': 0,
+                        'lateral_max': 0,
+                        'forward_rms': 0,
+                        'forward_cep95': 0,
+                        'forward_cep99': 0,
+                        'forward_max': 0,
+                        'horizontal_rms': 0,
+                        'horizontal_cep95': 0,
+                        'horizontal_cep99': 0,
+                        'horizontal_max': 0
+                    },
+                    'tc': {
+                        'odom': 0,
+                        'lateral_rms': 0,
+                        'lateral_cep95': 0,
+                        'lateral_cep99': 0,
+                        'lateral_max': 0,
+                        'forward_rms': 0,
+                        'forward_cep95': 0,
+                        'forward_cep99': 0,
+                        'forward_max': 0,
+                        'horizontal_rms': 0,
+                        'horizontal_cep95': 0,
+                        'horizontal_cep99': 0,
+                        'horizontal_max': 0
+                    },
+                    'gnss': {
+                        'odom': 0,
+                        'lateral_rms': 0,
+                        'lateral_cep95': 0,
+                        'lateral_cep99': 0,
+                        'lateral_max': 0,
+                        'forward_rms': 0,
+                        'forward_cep95': 0,
+                        'forward_cep99': 0,
+                        'forward_max': 0,
+                        'horizontal_rms': 0,
+                        'horizontal_cep95': 0,
+                        'horizontal_cep99': 0,
+                        'horizontal_max': 0
+                    }
+                }
+                all_type_stats.append(empty_stats)
+                continue
+            
+            # 提取时间范围
+            if len(type_time_range) > 0:
+                # 获取参考数据的起始和结束时间
+                if lcs is not None:
+                    ref_start = lcs[0, 0]
+                    ref_end = lcs[-1, 0]
+                elif tcs is not None:
+                    ref_start = tcs[0, 0]
+                    ref_end = tcs[-1, 0]
+                elif gnss is not None:
+                    ref_start = gnss[0, 0]
+                    ref_end = gnss[-1, 0]
+                else:
+                    print("  警告: 没有可用的LC或TC或gnss数据，无法处理-1值")
+                    ref_start = 0
+                    ref_end = 0
+                
+                # 处理时间范围，将-1替换为实际数据的时间点
+                t_start = []
+                t_end = []
+                print(f"时间范围数量: {len(type_time_range)}")
+                
+                # 处理当前场景的时间范围（将-1替换为实际值）
+                t_start_processed = []
+                t_end_processed = []
+                for i, (start, end) in enumerate(type_time_range):
+                    # 处理起点值
+                    if start == -1:
+                        start = ref_start
+                        start_label = "lcs[0,0]" if lcs is not None else "tcs[0,0]"
+                    else:
+                        start_label = str(start)
+                    
+                    # 处理终点值
+                    if end == -1:
+                        end = ref_end
+                        end_label = "lcs[-1,0]" if lcs is not None else "tcs[-1,0]"
+                    else:
+                        end_label = str(end)
+                    
+                    t_start.append(start)
+                    t_end.append(end)
+                    print(f"  范围 {i+1}: {start_label} ~ {end_label} (实际值: {start} ~ {end})")
+            else:
+                t_start = []
+                t_end = []
+                print("  无时间范围限制，使用全部数据")
+            
+            # 计算统计结果并收集
+            print("\n计算统计结果...")
+            stats = outpre_new(outfile_unified, diff_datalc, diff_datatc, diff_datagnss,
+                               lcs, tcs, gnss, yaw, None, t_start, t_end, type_label,
+                               append_mode=False, return_stats=True, lcver=lc_label, tcver=tc_label)
+            stats['type_label'] = type_label
+
+            # 检查该时间段内是否有实际数据（LC/TC/GNSS任意一个有数据即可）
+            has_data_in_range = False
+            if t_start and t_end:
+                for start, end in zip(t_start, t_end):
+                    # 检查LC数据
+                    if common_timelc is not None and len(common_timelc) > 0:
+                        mask_lc = (common_timelc >= start) & (common_timelc <= end)
+                        if np.any(mask_lc):
+                            has_data_in_range = True
+                            break
+                    # 检查TC数据
+                    if common_timetc is not None and len(common_timetc) > 0:
+                        mask_tc = (common_timetc >= start) & (common_timetc <= end)
+                        if np.any(mask_tc):
+                            has_data_in_range = True
+                            break
+                    # 检查GNSS数据
+                    if common_timegnss is not None and len(common_timegnss) > 0:
+                        mask_gnss = (common_timegnss >= start) & (common_timegnss <= end)
+                        if np.any(mask_gnss):
+                            has_data_in_range = True
+                            break
+            else:
+                # 无时间范围限制时，检查是否有数据
+                has_data_in_range = (common_timelc is not None and len(common_timelc) > 0) or \
+                                    (common_timetc is not None and len(common_timetc) > 0) or \
+                                    (common_timegnss is not None and len(common_timegnss) > 0)
+
+            stats['has_data'] = has_data_in_range
+
+            # 计算水平速度误差（使用当前场景的时间范围）
+            print("\n计算水平速度误差...")
+            velocity_stats = calculate_horizontal_velocity_stats(
+                diff_datalc, diff_datatc, diff_datagnss,
+                common_timelc, common_timetc, common_timegnss,
+                t_start, t_end, type_label, lc_label, tc_label
+            )
+            stats['velocity'] = velocity_stats
+
+            # 保存当前场景的时间范围（用于后续调试）
+            stats['t_start'] = t_start.copy() if t_start else []
+            stats['t_end'] = t_end.copy() if t_end else []
+
+            all_type_stats.append(stats)
+
+            # 绘制误差曲线（仅当该时间段内有数据时才绘图）
+            if has_data_in_range:
+                save_path = os.path.join(result_dir, f'{type_label}_horizontal_only.png')
+                print("\n绘制误差曲线...")
+                plot_errors(common_timelc, diff_datalc, common_timetc, diff_datatc,
+                            common_timegnss, diff_datagnss, t0, save_path, yaw, t_start, t_end,
+                            lc_label, tc_label,
+                            plotlc=plotlc, plottc=plottc)
+            else:
+                print(f"\n该时间段内无实际数据，跳过绘图（统计结果已输出到表格）")
+
+            # 对于type为"All"的情况，绘制详细子图（仅当有数据时）
+            if has_data_in_range and type_label.lower() == 'all':
+                print(f"\nType '{type_label}' 为必须解算场景，开始绘制水平误差详细子图...")
+                
+                # 从配置文件读取子图绘制参数
+                horizontal_threshold_meters = config.get('detail_plot', {}).get('horizontal_error_threshold_meters', 10.0)
+                detail_window_seconds = config.get('detail_plot', {}).get('detail_window_seconds', 20.0)
+                
+                # 调用水平精度专用的子图绘制函数
+                plot_detail_subplots_horizontal_only(
+                    common_timelc, diff_datalc,
+                    common_timetc, diff_datatc,
+                    common_timegnss, diff_datagnss,
+                    t0, yaw,
+                    horizontal_threshold_meters, detail_window_seconds,
+                    result_dir, type_label, lcver, tcver,
+                    plotlc=plotlc, plottc=plottc
+                )
+            else:
+                print(f"\nType '{type_label}' 不需要绘制详细子图（仅All类型需要）")
+        
+        # 处理正常场景（去除特殊场景后的剩余时段）
+        print(f"\n{'='*60}")
+        print("处理正常场景")
+        print(f"{'='*60}")
+        
+        # 获取All场景的时间范围作为总时间范围
+        all_time_ranges = []
+        for type_config in time_ranges_config:
+            if type_config.get('type_label', '').lower() == 'all':
+                all_time_ranges = type_config.get('type_time_range', [])
+                break
+        
+        if len(all_time_ranges) > 0:
+            # 处理All场景的时间范围（将-1替换为实际数据的时间点）
+            if lcs is not None:
+                ref_start = lcs[0, 0]
+                ref_end = lcs[-1, 0]
+            elif tcs is not None:
+                ref_start = tcs[0, 0]
+                ref_end = tcs[-1, 0]
+            elif gnss is not None:
+                ref_start = gnss[0, 0]
+                ref_end = gnss[-1, 0]
+            else:
+                ref_start = 0
+                ref_end = 0
+            
+            # 替换-1为实际时间点
+            all_time_ranges_processed = []
+            for start, end in all_time_ranges:
+                if start == -1:
+                    start = ref_start
+                if end == -1:
+                    end = ref_end
+                all_time_ranges_processed.append([start, end])
+            
+            # 从配置的排除场景列表中收集需要排除的时间范围
+            # GNSS正常场景：排除gnss_exclude列表中的场景 + 卫导异常排除等完全排除场景
+            gnss_excluded_ranges = []
+            for exclude_scene in gnss_exclude:
+                if exclude_scene in all_scene_time_ranges:
+                    gnss_excluded_ranges.extend(all_scene_time_ranges[exclude_scene])
+                    print(f"  GNSS正常场景排除: {exclude_scene}")
+            # 添加完全排除场景（如"卫导异常排除"）
+            for exclude_scene in exclude_scene_labels:
+                if exclude_scene in all_scene_time_ranges:
+                    gnss_excluded_ranges.extend(all_scene_time_ranges[exclude_scene])
+                    print(f"  GNSS正常场景排除（完全跳过）: {exclude_scene}")
+
+            # LC/TC正常场景：排除lc_tc_exclude列表中的场景 + 卫导异常排除等完全排除场景
+            lc_tc_excluded_ranges = []
+            for exclude_scene in lc_tc_exclude:
+                if exclude_scene in all_scene_time_ranges:
+                    lc_tc_excluded_ranges.extend(all_scene_time_ranges[exclude_scene])
+                    print(f"  LC/TC正常场景排除: {exclude_scene}")
+            # 添加完全排除场景（如"卫导异常排除"）
+            for exclude_scene in exclude_scene_labels:
+                if exclude_scene in all_scene_time_ranges:
+                    lc_tc_excluded_ranges.extend(all_scene_time_ranges[exclude_scene])
+                    print(f"  LC/TC正常场景排除（完全跳过）: {exclude_scene}")
+            
+            # 计算正常场景的时间范围
+            normal_time_ranges_gnss = calculate_normal_scene_time_ranges(
+                all_time_ranges_processed, gnss_excluded_ranges
+            )
+            normal_time_ranges_lc_tc = calculate_normal_scene_time_ranges(
+                all_time_ranges_processed, lc_tc_excluded_ranges
+            )
+            
+            # 处理GNSS正常场景
+            if len(normal_time_ranges_gnss) > 0:
+                print(f"\nGNSS正常场景（排除: {gnss_exclude}）:")
+                print(f"  排除的时间范围:")
+                for ex_range in gnss_excluded_ranges:
+                    print(f"    {ex_range[0]:.2f}s ~ {ex_range[1]:.2f}s")
+                print(f"  正常场景的时间范围:")
+                t_start_gnss = []
+                t_end_gnss = []
+                for i, (start, end) in enumerate(normal_time_ranges_gnss):
+                    print(f"    {start:.2f}s ~ {end:.2f}s")
+                    t_start_gnss.append(start)
+                    t_end_gnss.append(end)
+
+                # 生成GNSS正常场景的标签（使用简化格式，便于聚合脚本查找）
+                type_label_gnss = 'Normal_GNSS'
+
+                print(f"\n计算GNSS正常场景统计...")
+                stats_gnss_normal = outpre_new(
+                    outfile_unified, diff_datalc, diff_datatc, diff_datagnss, 
+                    lcs, tcs, gnss, yaw, None, t_start_gnss, t_end_gnss, type_label_gnss, 
+                    append_mode=False, return_stats=True, lcver=lc_label, tcver=tc_label
+                )
+                stats_gnss_normal['type_label'] = type_label_gnss
+                stats_gnss_normal['has_data'] = True
+                
+                # 计算GNSS正常场景速度误差
+                print(f"\n计算GNSS正常场景水平速度误差...")
+                velocity_stats_gnss = calculate_horizontal_velocity_stats(
+                    diff_datalc, diff_datatc, diff_datagnss,
+                    common_timelc, common_timetc, common_timegnss,
+                    t_start_gnss, t_end_gnss, type_label_gnss, lc_label, tc_label
+                )
+                stats_gnss_normal['velocity'] = velocity_stats_gnss
+                
+                # 只保留GNSS的统计，LC和TC置0
+                stats_gnss_normal['lc'] = {
+                    'odom': 0,
+                    'lateral_rms': 0, 'lateral_cep95': 0, 'lateral_cep99': 0, 'lateral_max': 0,
+                    'forward_rms': 0, 'forward_cep95': 0, 'forward_cep99': 0, 'forward_max': 0,
+                    'horizontal_rms': 0, 'horizontal_cep95': 0, 'horizontal_cep99': 0, 'horizontal_max': 0
+                }
+                stats_gnss_normal['tc'] = {
+                    'odom': 0,
+                    'lateral_rms': 0, 'lateral_cep95': 0, 'lateral_cep99': 0, 'lateral_max': 0,
+                    'forward_rms': 0, 'forward_cep95': 0, 'forward_cep99': 0, 'forward_max': 0,
+                    'horizontal_rms': 0, 'horizontal_cep95': 0, 'horizontal_cep99': 0, 'horizontal_max': 0
+                }
+                stats_gnss_normal['velocity']['lc'] = {
+                    'rms': 0, 'mean': 0, 'std': 0, 'max': 0, 'min': 0,
+                    'cep50': 0, 'cep68': 0, 'cep95': 0, 'cep99': 0
+                }
+                stats_gnss_normal['velocity']['tc'] = {
+                    'rms': 0, 'mean': 0, 'std': 0, 'max': 0, 'min': 0,
+                    'cep50': 0, 'cep68': 0, 'cep95': 0, 'cep99': 0
+                }
+                
+                # 绘制GNSS正常场景误差曲线
+                save_path_gnss = os.path.join(result_dir, f'正常_GNSS_horizontal_only.png')
+                print(f"\n绘制GNSS正常场景误差曲线...")
+                plot_errors(
+                    common_timelc, diff_datalc, common_timetc, diff_datatc, 
+                    common_timegnss, diff_datagnss, t0, save_path_gnss, yaw, 
+                    t_start_gnss, t_end_gnss, lcver, tcver,
+                    plotlc=False, plottc=False  # 只绘制GNSS
+                )
+                
+                all_type_stats.append(stats_gnss_normal)
+            else:
+                print(f"\n警告: GNSS正常场景时间范围为空，跳过GNSS正常场景处理")
+            
+            # 处理LC/TC正常场景
+            if len(normal_time_ranges_lc_tc) > 0:
+                # 生成LC/TC正常场景的标签（根据排除的场景动态生成）
+                if len(lc_tc_exclude) > 0:
+                    exclude_str = ', '.join(lc_tc_exclude)
+                    lc_tc_label_suffix = f'No {exclude_str}'
+                else:
+                    lc_tc_label_suffix = 'All Scenes'
+                
+                print(f"\nLC/TC正常场景（排除: {lc_tc_exclude}）:")
+                print(f"  排除的时间范围:")
+                for ex_range in lc_tc_excluded_ranges:
+                    print(f"    {ex_range[0]:.2f}s ~ {ex_range[1]:.2f}s")
+                print(f"  正常场景的时间范围:")
+                t_start_lc_tc = []
+                t_end_lc_tc = []
+                for i, (start, end) in enumerate(normal_time_ranges_lc_tc):
+                    print(f"    {start:.2f}s ~ {end:.2f}s")
+                    t_start_lc_tc.append(start)
+                    t_end_lc_tc.append(end)
+                
+                # 计算LC正常场景统计（使用简化格式，便于聚合脚本查找）
+                type_label_lc = 'Normal_LC'
+                print(f"\n计算LC正常场景统计...")
+                stats_lc_normal = outpre_new(
+                    outfile_unified, diff_datalc, diff_datatc, diff_datagnss, 
+                    lcs, tcs, gnss, yaw, None, t_start_lc_tc, t_end_lc_tc, type_label_lc, 
+                    append_mode=False, return_stats=True, lcver=lcver, tcver=tcver
+                )
+                stats_lc_normal['type_label'] = type_label_lc
+                stats_lc_normal['has_data'] = True
+                
+                # 计算LC正常场景速度误差
+                print(f"\n计算LC正常场景水平速度误差...")
+                velocity_stats_lc = calculate_horizontal_velocity_stats(
+                    diff_datalc, diff_datatc, diff_datagnss,
+                    common_timelc, common_timetc, common_timegnss,
+                    t_start_lc_tc, t_end_lc_tc, type_label_lc, lcver, tcver
+                )
+                stats_lc_normal['velocity'] = velocity_stats_lc
+                
+                # 只保留LC的统计，TC和GNSS置0
+                stats_lc_normal['tc'] = {
+                    'odom': 0,
+                    'lateral_rms': 0, 'lateral_cep95': 0, 'lateral_cep99': 0, 'lateral_max': 0,
+                    'forward_rms': 0, 'forward_cep95': 0, 'forward_cep99': 0, 'forward_max': 0,
+                    'horizontal_rms': 0, 'horizontal_cep95': 0, 'horizontal_cep99': 0, 'horizontal_max': 0
+                }
+                stats_lc_normal['gnss'] = {
+                    'odom': 0,
+                    'lateral_rms': 0, 'lateral_cep95': 0, 'lateral_cep99': 0, 'lateral_max': 0,
+                    'forward_rms': 0, 'forward_cep95': 0, 'forward_cep99': 0, 'forward_max': 0,
+                    'horizontal_rms': 0, 'horizontal_cep95': 0, 'horizontal_cep99': 0, 'horizontal_max': 0
+                }
+                stats_lc_normal['velocity']['tc'] = {
+                    'rms': 0, 'mean': 0, 'std': 0, 'max': 0, 'min': 0,
+                    'cep50': 0, 'cep68': 0, 'cep95': 0, 'cep99': 0
+                }
+                stats_lc_normal['velocity']['gnss'] = {
+                    'rms': 0, 'mean': 0, 'std': 0, 'max': 0, 'min': 0,
+                    'cep50': 0, 'cep68': 0, 'cep95': 0, 'cep99': 0
+                }
+                
+                # 绘制LC正常场景误差曲线
+                save_path_lc = os.path.join(result_dir, f'正常_LC_horizontal_only.png')
+                print(f"\n绘制LC正常场景误差曲线...")
+                plot_errors(
+                    common_timelc, diff_datalc, common_timetc, diff_datatc, 
+                    common_timegnss, diff_datagnss, t0, save_path_lc, yaw, 
+                    t_start_lc_tc, t_end_lc_tc, lcver, tcver,
+                    plotlc=True, plottc=False  # 只绘制LC
+                )
+                
+                all_type_stats.append(stats_lc_normal)
+
+                # 计算TC正常场景统计（使用简化格式，便于聚合脚本查找）
+                type_label_tc = 'Normal_TC'
+                print(f"\n计算TC正常场景统计...")
+                stats_tc_normal = outpre_new(
+                    outfile_unified, diff_datalc, diff_datatc, diff_datagnss, 
+                    lcs, tcs, gnss, yaw, None, t_start_lc_tc, t_end_lc_tc, type_label_tc, 
+                    append_mode=False, return_stats=True, lcver=lcver, tcver=tcver
+                )
+                stats_tc_normal['type_label'] = type_label_tc
+                stats_tc_normal['has_data'] = True
+                
+                # 计算TC正常场景速度误差
+                print(f"\n计算TC正常场景水平速度误差...")
+                velocity_stats_tc = calculate_horizontal_velocity_stats(
+                    diff_datalc, diff_datatc, diff_datagnss,
+                    common_timelc, common_timetc, common_timegnss,
+                    t_start_lc_tc, t_end_lc_tc, type_label_tc, lcver, tcver
+                )
+                stats_tc_normal['velocity'] = velocity_stats_tc
+                
+                # 只保留TC的统计，LC和GNSS置0
+                stats_tc_normal['lc'] = {
+                    'odom': 0,
+                    'lateral_rms': 0, 'lateral_cep95': 0, 'lateral_cep99': 0, 'lateral_max': 0,
+                    'forward_rms': 0, 'forward_cep95': 0, 'forward_cep99': 0, 'forward_max': 0,
+                    'horizontal_rms': 0, 'horizontal_cep95': 0, 'horizontal_cep99': 0, 'horizontal_max': 0
+                }
+                stats_tc_normal['gnss'] = {
+                    'odom': 0,
+                    'lateral_rms': 0, 'lateral_cep95': 0, 'lateral_cep99': 0, 'lateral_max': 0,
+                    'forward_rms': 0, 'forward_cep95': 0, 'forward_cep99': 0, 'forward_max': 0,
+                    'horizontal_rms': 0, 'horizontal_cep95': 0, 'horizontal_cep99': 0, 'horizontal_max': 0
+                }
+                stats_tc_normal['velocity']['lc'] = {
+                    'rms': 0, 'mean': 0, 'std': 0, 'max': 0, 'min': 0,
+                    'cep50': 0, 'cep68': 0, 'cep95': 0, 'cep99': 0
+                }
+                stats_tc_normal['velocity']['gnss'] = {
+                    'rms': 0, 'mean': 0, 'std': 0, 'max': 0, 'min': 0,
+                    'cep50': 0, 'cep68': 0, 'cep95': 0, 'cep99': 0
+                }
+                
+                # 绘制TC正常场景误差曲线
+                save_path_tc = os.path.join(result_dir, f'正常_TC_horizontal_only.png')
+                print(f"\n绘制TC正常场景误差曲线...")
+                plot_errors(
+                    common_timelc, diff_datalc, common_timetc, diff_datatc, 
+                    common_timegnss, diff_datagnss, t0, save_path_tc, yaw, 
+                    t_start_lc_tc, t_end_lc_tc, lcver, tcver,
+                    plotlc=False, plottc=True  # 只绘制TC
+                )
+                
+                all_type_stats.append(stats_tc_normal)
+            else:
+                print(f"\n警告: LC/TC正常场景时间范围为空，跳过LC/TC正常场景处理")
+        else:
+            print(f"\n警告: 未找到'All'场景的时间范围配置，无法计算正常场景")
+        
+        # 所有场景处理完成后，统一输出表格格式的统计结果（水平精度专用模式）
+        print("\n输出水平精度专用模式的统计结果...")
+        outpre_unified_table_horizontal_only(outfile_unified, all_type_stats, t0, lc_label, tc_label)
+        
+        # 输出水平速度误差统计文件
+        print("\n输出水平速度误差统计文件...")
+        velocity_stats_file = os.path.join(result_dir, 'velocity_precision.txt')
+        save_horizontal_velocity_stats(velocity_stats_file, all_type_stats, lc_label, tc_label)
+    
+    # 处理GNSS clip数据（如果配置启用）
+    saveclip = config.get('clip_plot', {}).get('saveclip', 0)
+    if saveclip == 1 and gnss0 is not None and diff_datagnss is not None and common_timegnss is not None:
+        print(f"\n配置启用GNSS Clip处理（水平精度专用模式）")
+        horizontal_threshold_meters = config.get('clip_plot', {}).get('horizontal_error_threshold_meters', 10.0)
+        clip_interval_seconds = config.get('clip_plot', {}).get('clip_plot_interval_seconds', 50.0)
+        
+        save_and_plot_clips_horizontal_only(
+            gnss0, diff_datagnss, common_timegnss, yaw,
+            horizontal_threshold_meters, clip_interval_seconds,
+            result_dir, t0, gnss_time_mapping,gnssstdindex0
+        )
+    
+    print(f"\n{'='*60}")
+    print("评估完成（水平精度专用模式）!")
+    print(f"{'='*60}\n")
+    
+    return {
+        'lcs': lcs,
+        'tcs': tcs,
+        'gnss': gnss,
+        'refdata': refdata,
+        'diff_datalc': diff_datalc,
+        'diff_datatc': diff_datatc,
+        'diff_datagnss': diff_datagnss,
+        'common_timelc': common_timelc,
+        'common_timetc': common_timetc,
+        'common_timegnss': common_timegnss,
+        't0': t0,
+        't_start': t_start,
+        't_end': t_end
+    }
+
+
+def main():
+    """命令行入口"""
+    # 支持两种模式：TOML配置文件和命令行参数
+    if len(sys.argv) == 1:
+        print("使用方法:")
+        print("  python precision_head_topic_ref_100c_wdh_horizontal_only.py <config.toml>")
+        print("\n配置文件示例:")
+        print("  在配置文件的[evaluation]部分添加:")
+        print("  horizontal_only = 1  # 启用水平精度专用模式")
+        return
+    
+    # 初始化config变量
+    config = None
+    
+    # 检查是否使用TOML配置文件
+    if sys.argv[1].endswith('.toml'):
+        # 使用TOML配置文件
+        config_path = sys.argv[1]
+        config = load_config_from_toml(config_path)
+        
+        # 从配置文件读取参数
+        basefold = config.get('data', {}).get('basefold', '')
+        reffile = config.get('data', {}).get('reffile', '')
+        lcver = config.get('data', {}).get('lcver', '')
+        tcver = config.get('data', {}).get('tcver', '')
+        dataset = config.get('data', {}).get('dataset', '')
+        dt = config.get('data', {}).get('dt', 0.0)
+        
+        plotlc = config.get('plot', {}).get('plotlc', True)
+        plottc = config.get('plot', {}).get('plottc', False)
+        plotgnssstat = config.get('plot', {}).get('plotgnssstat', True)
+        
+        tthreshod = config.get('evaluation', {}).get('tthreshod', 5e-3)
+        
+        output_dir = config.get('output', {}).get('output_dir', '')
+        if output_dir == '':
+            output_dir = None
+        
+        reftype = config.get('advanced', {}).get('reftype', 0)
+        statetype = config.get('advanced', {}).get('statetype', 0)
+        
+        # 读取水平精度专用配置项
+        horizontal_only = config.get('evaluation', {}).get('horizontal_only', 1)
+        
+        print(f"\n从配置文件读取参数:")
+        print(f"  basefold = {basefold}")
+        print(f"  reffile = {reffile}")
+        print(f"  lcver = {lcver}")
+        print(f"  tcver = {tcver}")
+        print(f"  dataset = {dataset}")
+        print(f"  dt = {dt}")
+        print(f"  plotlc = {plotlc}")
+        print(f"  plottc = {plottc}")
+        print(f"  plotgnssstat = {plotgnssstat}")
+        print(f"  tthreshod = {tthreshod}")
+        print(f"  output_dir = {output_dir}")
+        print(f"  reftype = {reftype}")
+        print(f"  statetype = {statetype}")
+        print(f"  horizontal_only = {horizontal_only}")
+        
+    else:
+        print('no config file.')
+    
+    # 执行评估
+    precision_head_topic_ref_100c_wdh_horizontal_only(
+        basefold=basefold,
+        reffile=reffile,
+        lcver=lcver,
+        tcver=tcver,
+        dataset=dataset,
+        dt=dt,
+        plotlc=plotlc,
+        plottc=plottc,
+        plotgnssstat=plotgnssstat,
+        tthreshod=tthreshod,
+        output_dir=output_dir,
+        reftype=reftype,
+        statetype=statetype,
+        config=config
+    )
+
+
+if __name__ == '__main__':
+    main()

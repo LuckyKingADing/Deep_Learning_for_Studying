@@ -1,0 +1,149 @@
+# precision_head_topic_ref_100c_wdh 配置文件示例
+# 使用方法: python precision_head_topic_ref_100c_wdh.py config.toml
+
+[data]
+# 基础目录路径
+basefold = "/mnt/d/dockers/rt/rtk_pvt/2026/0410/"
+# 参考数据文件路径
+reffile = "/mnt/d/dockers/rt/rtk_pvt/2026/0410/ref_02.txt"
+# LC版本名称 (默认: 空)
+lcver = "pvtlc_28a8b09"
+# TC版本名称 (默认: 空)
+tcver = "rtklc_28a8b09"
+# 数据集名称 (默认: 空)
+dataset = "2026-04-10_13-51-55"
+# 时间偏移 (默认: 0)
+dt = 0.0
+
+# GNSS数据路径配置
+# GNSS数据子目录 (默认: "topic_parse")
+gnss_subdir = "topic_parse"
+# GNSS数据文件名 (默认: "pvt.csv")
+gnss_filename = "pvt.csv"
+
+# GNSS数据列索引配置
+# 用于指定GNSS输入文件中位置相关的列索引（用于填充gnssindex中的索引7、8、9位置）
+# gnss_pos_index_1: 对应gnssindex[7]，默认为2（经度）
+# gnss_pos_index_2: 对应gnssindex[8]，默认为3（纬度）
+# gnss_pos_index_3: 对应gnssindex[9]，默认为4（高度）
+gnss_pos_index_1 = 2
+gnss_pos_index_2 = 3
+gnss_pos_index_3 = 4
+
+# 数据源标识符配置 (用于绘图和统计中的标签)
+lc_label = "pvtlc"
+tc_label = "rtklc"
+gnss_label = "pvt"
+
+[plot]
+# 是否绘制LC数据
+plotlc = true
+# 是否绘制TC数据
+plottc = true
+# 是否绘制GNSS数据
+plotgnssstat = true
+
+[evaluation]
+# 时间阈值
+tthreshod = 0.001
+horizontal_only = 0
+
+[detail_plot]
+# 水平误差阈值（米），超过此值将自动绘制子图
+horizontal_error_threshold_meters = 10.0
+# 高程误差阈值（米），超过此值将自动绘制子图
+vertical_error_threshold_meters = 15.0
+# 子图时间窗口（秒），在极值点前后各取的时间长度
+detail_window_seconds = 25.0
+
+[clip_plot]
+# 是否保存和绘制clip数据（1=启用，0=禁用）
+saveclip = 1
+# 水平误差阈值（米），超过此值的数据将被保存为clip
+horizontal_error_threshold_meters = 10.0
+# 垂直误差阈值（米），超过此值的数据将被保存为clip
+vertical_error_threshold_meters = 15.0
+# clip子图时间间隔（秒）
+clip_plot_interval_seconds = 50.0
+
+[normal_scene_exclusions]
+# 正常场景需要排除的场景配置
+# 这些场景标签必须与time_ranges.type_config中的type_label完全匹配（包括大小写）
+
+# LC/TC正常场景需要排除的场景列表
+lc_tc_exclude = ["隧道"]
+
+# GNSS正常场景需要排除的场景列表
+gnss_exclude = ["隧道", "转发器"]
+
+[output]
+# 输出目录 (默认为basefold，如果为空字符串则使用basefold)
+output_dir = "/mnt/d/dockers/rt/rtk_pvt/2026/0410"
+
+[advanced]
+# 参考真值的数据类型
+# 0: 2504月采集的真值
+# 1: 后续wdh处理的真值
+reftype = 1
+# 状态文件的类型
+# 0: tcmsf_sol.csv
+# 1: msf_debug_state.csv
+statetype = 1
+
+[time_ranges]
+# 时间范围配置，支持多个type，每个type可以配置多个时间范围
+# 格式: [[start1, end1], [start2, end2], ...]
+# 时间为绝对时间（秒）
+# 示例:
+# [[type_label, type_time_range], ...]
+# 例如: type "0" 对应的时间范围为 [[444255.6, 444624.3], [446783.1, 447156.6]]
+# 可以配置多个type的数据
+
+# Type 0: 20260105
+[[time_ranges.type_config]]
+type_label = "All"
+type_time_range = [[-1,-1]]
+
+# Type 1: 20251209
+[[time_ranges.type_config]]
+type_label = "开阔场景"
+type_time_range = [[452556,453880],[454435,454575],[454999,455075],
+[455160,455410],[456060,456300],[456315,456610],[457075,457130],[457965,458085],
+[458200,458270],[459750,460096],[460370,460730],[461120,461235],[474473,475560],
+[475900,476042],[476205,476440],[476650,476880],[476965,477077],[477100,477200],
+[477815,477940],[478475,478650],[480390,480860],[481000,481300],[481430,481740],
+[481925,482185],[482420,482535],[482565,482998]]
+
+# Type 2: 20251205
+[[time_ranges.type_config]]
+type_label = "半遮挡"
+type_time_range = [[453880,453925],[454360,454435],[454937,454999],
+[455075,455160],[456300,456315],[456610,456850],[456940,457075],
+[457130,457440],[457440,457520],[458085,458200],[459270,459750],[460260,460370],
+[475750,475900],[476500,476615],[476880,476965],[477077,477100],[477650,477815],
+[477940,478040],[479410,480300],[480325,480390],[480860,481000],[481300,481430],
+[481740,481925],[482185,482420]]
+
+# Type 3: 20251217
+[[time_ranges.type_config]]
+type_label = "双边遮挡"
+type_time_range = [[454325,454360],[454705,454725],[454848,454865],
+[454883,454893],[456850,456940],[457520,457965],[458270,459270],
+[460730,461120],[475560,475750],[476042,476205],[476440,476500],[476615,476650],
+[477200,477650],[478040,478475],[478650,479035]]
+
+# Type 4: 20251217
+[[time_ranges.type_config]]
+type_label = "隧道"
+type_time_range = [[453925,454325],[454575,454705],[454725,454848],
+[454865,454883],[454893,454937],[455410,456010],[456010,456060],[479035,479410],
+[480300,480325],[482535,482565]]
+
+# Type 5: 20260105
+[[time_ranges.type_config]]
+type_label = "转发器"
+type_time_range = [[460096,460260]]
+
+[[time_ranges.type_config]]
+type_label = "卫导异常排除"
+type_time_range = [[455015.4,455015.6],[455379.10,455379.30]]

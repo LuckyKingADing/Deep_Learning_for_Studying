@@ -1,0 +1,139 @@
+# 批量执行tcmsf脚本配置文件
+
+# 输入路径，包含多个数据集子目录
+input_path = "/mnt/d/dockers/rt/rtk_pvt/2026/"
+
+# TCMSF可执行文件路径   绝对路径
+tcmsf_bin = "/home/wufengbo/workcode/repos/cnoa/byd_adas_app/modules/util/automated_evaluation_pys/tcmsf/ota630_lc/tcmsf_offline/bin/TCMSF"
+
+# record_parser可执行文件路径
+record_parser_bin = "/home/wufengbo/workcode/repos/cnoa/byd_adas_app/modules/util/automated_evaluation_pys/tcmsf/ota630_lc/tcmsf_offline/bin/PARSER"
+
+# 坐标转换可执行文件路径（WGS84转Mars）
+convert_bin = "/home/wufengbo/workcode/repos/cnoa/byd_adas_app/modules/util/automated_evaluation_pys/tcmsf/ota630_lc/tcmsf_offline/bin/convert_ie"
+
+# ref文件所在目录（可选）
+# 如果有值，ref文件和ref_02文件都在该目录下
+# 如果为空，ref文件在dataset目录下，ref_02在ref文件同目录
+# 多dataset模式下不要设置reffold
+# 每个dataset目录下应有各自的ref_84.txt或ref_02.txt
+reffold = ""
+
+# tcmsf配置文件路径  绝对路径
+config_file = "/home/wufengbo/workcode/repos/cnoa/byd_adas_app/modules/util/automated_evaluation_pys/tcmsf/ota630_lc/tcmsf_offline/modules/localization/conf/tcmsf_init_platform_A.toml"
+
+# tcmsf版本号（用于结果目录命名）
+tcmsf_ver = "ota630"
+
+# 指定当前两种融合定位模式的类型
+pvtlc_pattern = "pvtlc"
+rtklc_pattern = "rtklc"
+
+# 输出基础目录（可选，如果为空则使用输入路径）
+output_base_dir = "/mnt/d/dockers/rt/rtk_pvt/result"
+
+# GNSS OEM类型
+gnss_oem_type = "LG695P"
+
+# 车辆信息配置文件路径  相对路径
+vehicle_info_file = "modules/localization/conf/vehicle_hc25.toml"
+
+# 是否显示详细输出
+verbose = false
+
+# 是否备份配置文件
+config_backup = true
+
+# Fusion模式列表（将依次执行）
+fusion_modes = [0, 2]
+
+# 要跳过的目录名称列表（例如输出目录、临时目录等）
+skip_dirs = ["result","batch_run_logs"]
+
+# ==================== 精度评估全局配置 ====================
+# 是否只评估水平误差（1=仅水平，0=水平和垂直）
+horizontal_only = 0
+
+# ==================== datasets 配置（新增）====================
+# datasets 配置：每个 dataset 共享相同的 gnss_oem_type 和 vehicle_info_file
+# input_path 下每个 name 对应一个子目录，该子目录下包含实际需要处理的子数据集
+# 如果不使用 datasets 配置，将使用原有的单层逻辑（向后兼容）
+# 根据参考坐标类型将ref.txt转换成ref_02.txt 或者 ref_84.txt进行精度评估
+# 参考坐标类型: "gcj02" = TCMSF输出为GCJ-02(加偏)坐标，使用ref_02.txt评估
+#             "wgs84" = TCMSF输出为WGS84(未加偏)坐标，使用ref_84.txt评估
+
+[[datasets]]
+name = "0324"
+gnss_oem_type = "LG695P"
+vehicle_info_file = "modules/localization/conf/vehicle_hc25acu.toml"
+# 精度评估相关参数
+gnss_pos_index_1 = 2
+gnss_pos_index_2 = 3
+gnss_pos_index_3 = 4
+lc_label = "pvtlc"
+tc_label = "rtklc"
+gnss_label = "pvt"
+gnss_subdir = "topic_parse"
+gnss_filename = "pvt.csv"
+ref_type = "gcj02"
+
+[[datasets]]
+name = "0319"
+gnss_oem_type = "LG695P"
+vehicle_info_file = "modules/localization/conf/vehicle_hc25acu.toml"
+# 精度评估相关参数
+gnss_pos_index_1 = 2
+gnss_pos_index_2 = 3
+gnss_pos_index_3 = 4
+lc_label = "pvtlc"
+tc_label = "rtklc"
+gnss_label = "pvt"
+gnss_subdir = "topic_parse"
+gnss_filename = "pvt.csv"
+ref_type = "gcj02"
+
+[[datasets]]
+name = "0316"
+gnss_oem_type = "LG695P"
+vehicle_info_file = "modules/localization/conf/vehicle_hc25acu.toml"
+# 精度评估相关参数
+gnss_pos_index_1 = 2
+gnss_pos_index_2 = 3
+gnss_pos_index_3 = 4
+lc_label = "pvtlc"
+tc_label = "rtklc"
+gnss_label = "pvt"
+gnss_subdir = "topic_parse"
+gnss_filename = "pvt.csv"
+ref_type = "gcj02"
+
+[[datasets]]
+name = "0315"
+gnss_oem_type = "LG695P"
+vehicle_info_file = "modules/localization/conf/vehicle_hc25acu.toml"
+# 精度评估相关参数
+gnss_pos_index_1 = 2
+gnss_pos_index_2 = 3
+gnss_pos_index_3 = 4
+lc_label = "pvtlc"
+tc_label = "rtklc"
+gnss_label = "pvt"
+gnss_subdir = "topic_parse"
+gnss_filename = "pvt.csv"
+ref_type = "gcj02"
+
+[[datasets]]
+name = "0227"
+gnss_oem_type = "LG695P"
+vehicle_info_file = "modules/localization/conf/vehicle_hc25acu.toml"
+# 精度评估相关参数
+gnss_pos_index_1 = 2
+gnss_pos_index_2 = 3
+gnss_pos_index_3 = 4
+lc_label = "pvtlc"
+tc_label = "rtklc"
+gnss_label = "pvt"
+gnss_subdir = "topic_parse"
+gnss_filename = "pvt.csv"
+ref_type = "wgs84"
+# ==================== datasets 配置结束 =====================

@@ -1,0 +1,34 @@
+#oss文件夹链接
+oss_data_url = "oss://oss-byd-wl-roadtest/气囊压测/RTK验证/移远/0324-3231/0324-3231/2026-03-24_11-52-49/"
+#record文件起始和终止编号区间，支持多个区间，编号在区间范围内的都会下载,如果要下载全部文件，可以写成[[0,1000]]
+seq_intervals = [[0, 1000]]
+# 生成文件夹前缀
+prefix = "pvt_nocamera_"
+# 自定义需要保留的话题数据
+reserve_channels = [
+  "/drivers/imu/raw",
+  "/drivers/ins/raw ",
+  "/drivers/gnss/raw",
+  "/drivers/gnss/pvt",
+  "/drivers/gnss/packet",
+  "/drivers/navi_sd/raw",
+  "/drivers/navi_path/raw",
+  "/drivers/base_rtcm/raw",
+  "/drivers/rover_rtcm/raw",
+  "/drivers/navi_status/raw",
+  "/drivers/canbus/vehicle_info",
+  #"/drivers/camera/front_wide/compressed/image",
+  #"/perception/detection/bev/lane_track",
+  "/localization/dr",
+  "/localization/tcmsf",
+  #"/localization/vf/vf_result",
+  #"/localization/ld_loc_result",
+  #"/localization/ld_mapmatch_result",
+  "/localization/sd_mapmatch_result",
+  "/cem/ehr/traffic_road",
+  "/cem/ehr/map_scene",
+  "/cem/ehr/position",
+  #"/noa_map/routing_map",
+  #"/localization/reloc/reloc_result",
+  "/calibration/calib_param/sensor_param",
+]

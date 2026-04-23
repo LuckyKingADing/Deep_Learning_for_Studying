@@ -1,0 +1,18 @@
+# 聚合精度统计文件配置文件（位置精度和速度精度）
+
+[general]
+# 输入目录，会递归查找所有精度统计文件
+input_dir = "/mnt/d/dockers/rt/rtk_pvt/2026/0410"
+
+# 位置精度输出文件路径
+output_file = "/mnt/d/dockers/rt/rtk_pvt/2026/0410/position_precision_aggregated.txt"
+
+# 速度精度输出文件路径
+velocity_output_file = "/mnt/d/dockers/rt/rtk_pvt/2026/0410/velocity_precision_aggregated.txt"
+
+[options]
+# 是否跳过全为0的场景（默认true）
+skip_zero_scenes = true
+
+# 是否在控制台打印详细信息（默认true）
+verbose = true
