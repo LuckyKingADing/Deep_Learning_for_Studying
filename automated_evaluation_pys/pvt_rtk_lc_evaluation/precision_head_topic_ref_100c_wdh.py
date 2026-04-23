@@ -19,7 +19,9 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import os
 import sys
+import toml
 import warnings
+from pathlib import Path
 warnings.filterwarnings('ignore')
 
 
@@ -48,11 +50,11 @@ from evaluation_utils import (
 )
 
 def plot_detail_subplots(
-    common_timelc, diff_datalc, common_timetc, diff_datatc, 
-    common_timegnss, diff_datagnss, t0, yaw, 
-    horizontal_threshold_meters, vertical_threshold_meters, 
+    common_timelc, diff_datalc, common_timetc, diff_datatc,
+    common_timegnss, diff_datagnss, t0, yaw,
+    horizontal_threshold_meters, vertical_threshold_meters,
     detail_window_seconds, output_dir, type_label, lcver='LC', tcver='TC',
-    plotlc=True, plottc=True
+    plotlc=True, plottc=True, gap_intervals=None
 ):
     """
     绘制误差大于阈值的详细子图（水平误差或高程误差任一超过阈值）
@@ -208,7 +210,7 @@ def plot_detail_subplots(
             t0, save_path, yaw, 
             t_start=[subplot_start], t_end=[subplot_end],
             lcver=lcver, tcver=tcver, is_detail=True,
-            plotlc=plotlc, plottc=plottc
+            plotlc=plotlc, plottc=plottc, gap_intervals=gap_intervals
         )
         
         print(f"  已保存子图 {subplot_count}: {os.path.basename(save_path)}")
@@ -630,6 +632,43 @@ def precision_head_topic_ref_100c_wdh(
             exclude_scene_labels.append(type_label)
             print(f"识别排除场景: '{type_label}'，时间段 {len(type_time_range)} 个，数据将完全跳过处理")
 
+    # ---- 任务1：加载 gap_intervals，统计时排除 gap 区间 ----
+    gap_intervals = []
+    gap_dir = Path(basefold) / "gap_detection"
+    gap_toml = gap_dir / "gap_intervals.toml"
+    if gap_toml.exists():
+        try:
+            gap_config_all = toml.load(str(gap_toml))
+            # 查找与当前 lcver / tcver 匹配的 gap 配置
+            for key, val in gap_config_all.items():
+                if not isinstance(val, dict):
+                    continue
+                fusion_type = val.get("fusion_type", "")
+                gps_ranges = val.get("gps_ranges", [])
+                if not fusion_type or not gps_ranges:
+                    continue
+                # 用融合类型的前缀匹配（pvtlc_xxx / rtklc_xxx）
+                fusion_prefix = fusion_type.split('_')[0] if '_' in fusion_type else fusion_type
+                lcver_prefix = lcver.split('_')[0] if '_' in lcver else lcver
+                tcver_prefix = tcver.split('_')[0] if '_' in tcver else tcver
+                if fusion_prefix == lcver_prefix or fusion_prefix == tcver_prefix:
+                    gap_intervals = [tuple(r) for r in gps_ranges]
+                    print(f"\n[Gap] 加载 gap_intervals (from {fusion_type}): {len(gap_intervals)} 段")
+                    for s, e in gap_intervals:
+                        print(f"  GPS {s:.3f} ~ {e:.3f} ({e - s:.2f}s)")
+                    break
+            if not gap_intervals:
+                print(f"[Gap] 未匹配到 {lcver_prefix} 或 {tcver_prefix} 的gap配置，跳过 gap 处理")
+        except Exception as e:
+            print(f"[Gap] 读取 gap_intervals.toml 失败: {e}")
+    else:
+        print(f"[Gap] gap_intervals.toml 不存在: {gap_toml}，跳过 gap 处理")
+
+    # 将 gap 区间加入排除列表（统计时不计入有效里程）
+    if gap_intervals:
+        exclude_time_ranges.extend([[s, e] for s, e in gap_intervals])
+        print(f"[Gap] 已将 {len(gap_intervals)} 段 gap 加入统计排除列表")
+
     # 函数：从时间序列中排除指定时间段
     def filter_excluded_time_ranges(time_data, diff_data, exclude_ranges):
         """从数据中排除指定时间段"""
@@ -930,8 +969,9 @@ def precision_head_topic_ref_100c_wdh(
                 save_path = os.path.join(result_dir, f'{type_label}.png')
                 print("\n绘制误差曲线...")
                 plot_errors(common_timelc, diff_datalc, common_timetc, diff_datatc,
-                            common_timegnss, diff_datagnss, t0, save_path, yaw, t_start, t_end, lcver, tcver,
-                            plotlc=plotlc, plottc=plottc)
+                            common_timegnss, diff_datagnss, t0, save_path, yaw, t_start, t_end,
+                            lcver, tcver, plotlc=plotlc, plottc=plottc,
+                            gap_intervals=gap_intervals)
             else:
                 print(f"\n该时间段内无实际数据，跳过绘图（统计结果已输出到表格）")
             
@@ -952,7 +992,7 @@ def precision_head_topic_ref_100c_wdh(
                     t0, yaw,
                     horizontal_threshold_meters, vertical_threshold_meters,
                     detail_window_seconds, result_dir, type_label, lcver, tcver,
-                    plotlc=plotlc, plottc=plottc
+                    plotlc=plotlc, plottc=plottc, gap_intervals=gap_intervals
                 )
             else:
                 print(f"\nType '{type_label}' 不需要绘制详细子图（仅All类型需要）")
@@ -1092,7 +1132,7 @@ def precision_head_topic_ref_100c_wdh(
                     common_timelc, diff_datalc, common_timetc, diff_datatc,
                     common_timegnss, diff_datagnss, t0, save_path_gnss, yaw,
                     t_start_gnss, t_end_gnss, lcver, tcver,
-                    plotlc=False, plottc=False
+                    plotlc=False, plottc=False, gap_intervals=gap_intervals
                 )
 
                 all_type_stats.append(stats_gnss_normal)
@@ -1171,7 +1211,7 @@ def precision_head_topic_ref_100c_wdh(
                     common_timelc, diff_datalc, common_timetc, diff_datatc,
                     common_timegnss, diff_datagnss, t0, save_path_lc, yaw,
                     t_start_lc_tc, t_end_lc_tc, lcver, tcver,
-                    plotlc=True, plottc=False
+                    plotlc=True, plottc=False, gap_intervals=gap_intervals
                 )
 
                 all_type_stats.append(stats_lc_normal)
@@ -1227,7 +1267,7 @@ def precision_head_topic_ref_100c_wdh(
                     common_timelc, diff_datalc, common_timetc, diff_datatc,
                     common_timegnss, diff_datagnss, t0, save_path_tc, yaw,
                     t_start_lc_tc, t_end_lc_tc, lcver, tcver,
-                    plotlc=False, plottc=True
+                    plotlc=False, plottc=True, gap_intervals=gap_intervals
                 )
 
                 all_type_stats.append(stats_tc_normal)

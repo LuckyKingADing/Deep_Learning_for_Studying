@@ -26,9 +26,12 @@
     --lc-label: LC标签（默认: 'LC'）
     --tc-label: TC标签（默认: 'TC'）
     --gnss-label: GNSS标签（默认: 'RTK'）
+    --skip-gap-detection: 跳过连续性检测，直接进行精度评估
+    --gap-threshold: 大段缺失阈值秒数（默认: 5.0）
 
 流程说明:
     1. 遍历 tcmsf_output_directory 下的所有数据集子目录
+    1b. 为每个数据集运行 gap_detection.py（除非 --skip-gap-detection）
     2. 为每个数据集生成配置文件（从 original_data_directory 读取 ref_02 和 time_ranges）
     3. 运行精度评估脚本
 """
@@ -630,7 +633,22 @@ def main():
         default=1,
         help='是否只评估水平误差（1=仅水平，0=水平和垂直，默认: 1）'
     )
-    
+
+    parser.add_argument(
+        '--skip-gap-detection',
+        action='store_true',
+        default=False,
+        help='跳过连续性检测（gap_detection.py），直接进行精度评估'
+    )
+
+    parser.add_argument(
+        '--gap-threshold',
+        type=float,
+        default=5.0,
+        dest='gap_threshold',
+        help='连续性检测的大段缺失阈值（秒，默认: 5.0）'
+    )
+
     args = parser.parse_args()
     
     tcmsf_output_dir = args.tcmsf_output_directory
@@ -647,6 +665,8 @@ def main():
     tc_label = args.tc_label
     gnss_label = args.gnss_label
     horizontal_only = args.horizontal_only
+    skip_gap_detection = args.skip_gap_detection
+    gap_threshold = args.gap_threshold
     
     # 检查目录是否存在
     if not os.path.isdir(tcmsf_output_dir):
@@ -685,6 +705,8 @@ def main():
     print(f"GNSS位置索引: [{gnss_pos_index_1}, {gnss_pos_index_2}, {gnss_pos_index_3}]")
     print(f"标签配置: LC={lc_label}, TC={tc_label}, GNSS={gnss_label}")
     print(f"评估脚本路径: {script_path}")
+    print(f"跳过连续性检测: {skip_gap_detection}")
+    print(f"Gap检测阈值: {gap_threshold}s")
     print(f"{'='*80}\n")
     
     # 查找所有数据集目录
@@ -701,6 +723,55 @@ def main():
         dataset_name = os.path.basename(dataset_dir)
         print(f"  {i}. {dataset_name}")
     
+    # ---- 任务1：运行 gap_detection.py 进行连续性检测 ----
+    if not skip_gap_detection:
+        print(f"\n{'='*80}")
+        print(f"[Step 0] 融合定位连续性检测 (gap_detection.py)")
+        print(f"{'='*80}")
+        print(f"检测阈值: >= {gap_threshold}s 判定为大段缺失")
+        print(f"")
+
+        gap_detection_script = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            '..', 'commons', 'gap_detection.py'
+        )
+        gap_detection_script = os.path.normpath(gap_detection_script)
+
+        if not os.path.exists(gap_detection_script):
+            print(f"[警告] gap_detection.py 不存在: {gap_detection_script}")
+            print(f"跳过连续性检测")
+        else:
+            for dataset_dir in dataset_dirs:
+                dataset_name = os.path.basename(dataset_dir)
+                print(f"\n--- 检测数据集: {dataset_name} ---")
+
+                gap_cmd = [
+                    sys.executable, gap_detection_script,
+                    dataset_dir,
+                    '--threshold', str(gap_threshold)
+                ]
+
+                try:
+                    result = subprocess.run(
+                        gap_cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=300
+                    )
+                    if result.returncode == 0:
+                        print(f"  ✓ {dataset_name} 连续性检测完成")
+                    else:
+                        print(f"  ✗ {dataset_name} 连续性检测失败 (返回码: {result.returncode})")
+                        if result.stderr:
+                            for line in result.stderr.strip().split('\n')[-5:]:
+                                print(f"    {line}")
+                except subprocess.TimeoutExpired:
+                    print(f"  ✗ {dataset_name} 连续性检测超时（>5分钟）")
+                except Exception as e:
+                    print(f"  ✗ {dataset_name} 连续性检测异常: {e}")
+    else:
+        print(f"\n[跳过] 连续性检测（--skip-gap-detection）\n")
+
     # 为所有数据集生成配置文件
     config_files, config_success_count, config_fail_count = generate_all_configs(
         tcmsf_output_dir, original_data_dir, config_template_path, 

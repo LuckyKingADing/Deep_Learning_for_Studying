@@ -2,7 +2,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from calculate_errors import calculate_errors
 
-def plot_errors(common_timelc, diff_datalc, common_timetc, diff_datatc, common_timegnss, diff_datagnss, t0, save_path, yaw, t_start=None, t_end=None, lcver='LC', tcver='TC', is_detail=False, plotlc=True, plottc=True):
+
+def plot_errors(common_timelc, diff_datalc, common_timetc, diff_datatc, common_timegnss, diff_datagnss, t0, save_path, yaw, t_start=None, t_end=None, lcver='LC', tcver='TC', is_detail=False, plotlc=True, plottc=True, gap_intervals=None):
     """
     PLOT_ERRORS 绘制误差曲线
     :param common_timelc: LC时间向量
@@ -20,6 +21,8 @@ def plot_errors(common_timelc, diff_datalc, common_timetc, diff_datatc, common_t
     :param is_detail: 是否为详细子图模式（详细子图不减去t0）
     :param plotlc: 是否绘制LC数据
     :param plottc: 是否绘制TC数据
+    :param gap_intervals: gap区间列表，List[Tuple[float, float]]，GPS秒为单位
+                            落在gap区间内的误差值会被替换为10
     """
     # 判断是否只绘制GNSS
     only_gnss = not plotlc and not plottc
@@ -78,6 +81,15 @@ def plot_errors(common_timelc, diff_datalc, common_timetc, diff_datatc, common_t
                 lc_lateral = lc_lateral[lc_indices]
                 lc_vertical = lc_vertical[lc_indices]
                 lc_forward = lc_forward[lc_indices]
+                # gap 区间内填充固定值 10
+                if gap_intervals is not None and len(gap_intervals) > 0 and len(time_lc) > 0:
+                    for start, end in gap_intervals:
+                        for i in range(len(time_lc)):
+                            if start <= time_lc[i] <= end:
+                                lc_horizontal[i] = 10.0
+                                lc_lateral[i] = 10.0
+                                lc_vertical[i] = 10.0
+                                lc_forward[i] = 10.0
             else:
                 # 如果没有数据在时间范围内，清空数据
                 time_lc = np.array([])
@@ -122,6 +134,15 @@ def plot_errors(common_timelc, diff_datalc, common_timetc, diff_datatc, common_t
                 tc_lateral = tc_lateral[tc_indices]
                 tc_vertical = tc_vertical[tc_indices]
                 tc_forward = tc_forward[tc_indices]
+                # gap 区间内填充固定值 10
+                if gap_intervals is not None and len(gap_intervals) > 0 and len(time_tc) > 0:
+                    for start, end in gap_intervals:
+                        for i in range(len(time_tc)):
+                            if start <= time_tc[i] <= end:
+                                tc_horizontal[i] = 10.0
+                                tc_lateral[i] = 10.0
+                                tc_vertical[i] = 10.0
+                                tc_forward[i] = 10.0
             else:
                 # 如果没有数据在时间范围内，清空数据
                 time_tc = np.array([])
@@ -166,6 +187,15 @@ def plot_errors(common_timelc, diff_datalc, common_timetc, diff_datatc, common_t
                 gnss_lateral = gnss_lateral[gnss_indices]
                 gnss_vertical = gnss_vertical[gnss_indices]
                 gnss_forward = gnss_forward[gnss_indices]
+                # gap 区间内填充固定值 10
+                if gap_intervals is not None and len(gap_intervals) > 0 and len(time_gnss) > 0:
+                    for start, end in gap_intervals:
+                        for i in range(len(time_gnss)):
+                            if start <= time_gnss[i] <= end:
+                                gnss_horizontal[i] = 10.0
+                                gnss_lateral[i] = 10.0
+                                gnss_vertical[i] = 10.0
+                                gnss_forward[i] = 10.0
             else:
                 # 如果没有数据在时间范围内，清空数据
                 time_gnss = np.array([])

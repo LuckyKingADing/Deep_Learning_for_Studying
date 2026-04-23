@@ -84,7 +84,12 @@ def main():
   1. 从配置文件读取 input_path（原始数据集路径）
   2. 执行 batch_run_tcmsf.py，将原始数据集处理为 TCMSF 结果
   3. 执行 batch_run_precision_head_horizontal.py，对 TCMSF 结果进行精度评估
+     （精度评估内部会自动运行 gap_detection.py 检测大段缺失）
   4. 执行 aggregate_precision_statistics.py，聚合精度统计结果
+
+说明:
+  gap 检测的阈值通过配置文件中的 gap_threshold 字段控制，
+  默认 5.0 秒，设置为 null 可跳过检测。
         """
     )
     
@@ -93,7 +98,7 @@ def main():
         type=str,
         help="配置文件路径（包含 input_path 等配置项）"
     )
-    
+
     args = parser.parse_args()
     
     # 验证配置文件
@@ -165,7 +170,7 @@ def main():
     print(f"\n{'='*80}")
     print("步骤 2: 执行精度评估")
     print(f"{'='*80}")
-    
+
     # 检查是否有 datasets 配置
     datasets_config = config.get('datasets', [])
     
