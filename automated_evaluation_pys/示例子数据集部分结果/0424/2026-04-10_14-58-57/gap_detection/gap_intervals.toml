@@ -1,0 +1,39 @@
+[gap_detection]
+gap_threshold_sec = 5.0
+min_consecutive_missing = 3
+imu_freq_hz = 100
+vehicle_freq_hz = 100
+fusion_freq_hz = 5
+time_tolerance_sec = 0.5
+
+[imu_timestamp_gaps]
+sensor_type = "IMU"
+gps_ranges = [ [ 457515.86, 457636.07,], [ 458595.68, 458775.9,], [ 460875.72, 461055.94,],]
+count = 3
+
+[vehicle_timestamp_gaps]
+sensor_type = "Vehicle"
+gps_ranges = [ [ 457515.86, 457636.07,], [ 458595.68, 458775.9,], [ 460875.72, 461055.94,],]
+count = 3
+
+[gap_intervals_pvtlc_c80c32da]
+fusion_type = "pvtlc_c80c32da"
+gps_ranges = [ [ 457515.86, 457636.07,], [ 458595.68, 458775.9,], [ 460875.72, 461055.94,],]
+count = 3
+
+[gap_intervals_rtklc_c80c32da]
+fusion_type = "rtklc_c80c32da"
+gps_ranges = [ [ 457515.86, 457636.07,], [ 458595.68, 458775.9,], [ 460875.72, 461055.94,],]
+count = 3
+
+[fusion_timestamp_gaps_pvtlc_c80c32da]
+fusion_type = "pvtlc_c80c32da"
+gps_ranges = [ [ 457515.86, 457636.07,], [ 458595.68, 458775.9,], [ 460875.72, 461055.94,],]
+count = 3
+description = "融合输出时间戳本身缺失（非传感器匹配缺失）"
+
+[fusion_timestamp_gaps_rtklc_c80c32da]
+fusion_type = "rtklc_c80c32da"
+gps_ranges = [ [ 457515.86, 457636.07,], [ 458595.68, 458775.9,], [ 460875.72, 461055.94,],]
+count = 3
+description = "融合输出时间戳本身缺失（非传感器匹配缺失）"

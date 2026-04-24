@@ -1,19 +1,46 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.patches import Patch
 from calculate_errors import calculate_errors
+
+
+def _add_gap_shadows(ax, gap_intervals, time_offset, y_min, y_max, alpha=0.3, color='gray'):
+    """
+    在子图上添加gap区间的阴影区域
+
+    Args:
+        ax: matplotlib轴对象
+        gap_intervals: gap区间列表，List[Tuple[float, float]]，GPS绝对秒为单位
+        time_offset: 时间偏移量（t0），用于将绝对时间转换为相对时间
+        y_min: Y轴最小值
+        y_max: Y轴最大值
+        alpha: 阴影透明度
+        color: 阴影颜色
+    """
+    if gap_intervals is None or len(gap_intervals) == 0:
+        return
+
+    for start_abs, end_abs in gap_intervals:
+        # 将绝对GPS秒转换为相对时间
+        start_rel = start_abs - time_offset
+        end_rel = end_abs - time_offset
+        # 添加阴影区域（跨越整个Y轴范围）
+        ax.axvspan(start_rel, end_rel, alpha=alpha, color=color, label='_nolegend_')
 
 
 def plot_errors(common_timelc, diff_datalc, common_timetc, diff_datatc, common_timegnss, diff_datagnss, t0, save_path, yaw, t_start=None, t_end=None, lcver='LC', tcver='TC', is_detail=False, plotlc=True, plottc=True, gap_intervals=None):
     """
     PLOT_ERRORS 绘制误差曲线
-    :param common_timelc: LC时间向量
+
+    :param common_timelc: LC时间向量（绝对GPS秒）
     :param diff_datalc: LC差值数据
-    :param common_timetc: TC时间向量
+    :param common_timetc: TC时间向量（绝对GPS秒）
     :param diff_datatc: TC差值数据
-    :param common_timegnss: GNSS时间向量
+    :param common_timegnss: GNSS时间向量（绝对GPS秒）
     :param diff_datagnss: GNSS差值数据
-    :param t0: 时间基准点
+    :param t0: 时间基准点（绝对GPS秒）
     :param save_path: 图像保存路径
+    :param yaw: 航向角数据
     :param t_start: 时间范围起始点（可选），绝对时间
     :param t_end: 时间范围结束点（可选），绝对时间
     :param lcver: LC版本标识
@@ -21,8 +48,8 @@ def plot_errors(common_timelc, diff_datalc, common_timetc, diff_datatc, common_t
     :param is_detail: 是否为详细子图模式（详细子图不减去t0）
     :param plotlc: 是否绘制LC数据
     :param plottc: 是否绘制TC数据
-    :param gap_intervals: gap区间列表，List[Tuple[float, float]]，GPS秒为单位
-                            落在gap区间内的误差值会被替换为10
+    :param gap_intervals: gap区间列表，List[Tuple[float, float]]，GPS绝对秒为单位
+                            gap区间会用灰色阴影区域标记，区间内的数据不参与绘图和统计
     """
     # 判断是否只绘制GNSS
     only_gnss = not plotlc and not plottc
@@ -81,15 +108,22 @@ def plot_errors(common_timelc, diff_datalc, common_timetc, diff_datatc, common_t
                 lc_lateral = lc_lateral[lc_indices]
                 lc_vertical = lc_vertical[lc_indices]
                 lc_forward = lc_forward[lc_indices]
-                # gap 区间内填充固定值 10
+                # gap区间内的数据完全排除（不参与绘图和Y轴范围计算）
                 if gap_intervals is not None and len(gap_intervals) > 0 and len(time_lc) > 0:
-                    for start, end in gap_intervals:
-                        for i in range(len(time_lc)):
-                            if start <= time_lc[i] <= end:
-                                lc_horizontal[i] = 10.0
-                                lc_lateral[i] = 10.0
-                                lc_vertical[i] = 10.0
-                                lc_forward[i] = 10.0
+                    # 构建排除mask：不在任何gap区间内的数据才保留
+                    keep_mask = np.ones(len(time_lc), dtype=bool)
+                    for start_abs, end_abs in gap_intervals:
+                        start_rel = start_abs - time_offset  # 转换为相对时间
+                        end_rel = end_abs - time_offset
+                        # 标记落在gap区间内的数据为False
+                        gap_mask = (time_lc >= start_rel) & (time_lc <= end_rel)
+                        keep_mask &= ~gap_mask
+                    # 只保留不在gap区间内的数据
+                    time_lc = time_lc[keep_mask]
+                    lc_horizontal = lc_horizontal[keep_mask]
+                    lc_lateral = lc_lateral[keep_mask]
+                    lc_vertical = lc_vertical[keep_mask]
+                    lc_forward = lc_forward[keep_mask]
             else:
                 # 如果没有数据在时间范围内，清空数据
                 time_lc = np.array([])
@@ -134,15 +168,19 @@ def plot_errors(common_timelc, diff_datalc, common_timetc, diff_datatc, common_t
                 tc_lateral = tc_lateral[tc_indices]
                 tc_vertical = tc_vertical[tc_indices]
                 tc_forward = tc_forward[tc_indices]
-                # gap 区间内填充固定值 10
+                # gap区间内的数据完全排除
                 if gap_intervals is not None and len(gap_intervals) > 0 and len(time_tc) > 0:
-                    for start, end in gap_intervals:
-                        for i in range(len(time_tc)):
-                            if start <= time_tc[i] <= end:
-                                tc_horizontal[i] = 10.0
-                                tc_lateral[i] = 10.0
-                                tc_vertical[i] = 10.0
-                                tc_forward[i] = 10.0
+                    keep_mask = np.ones(len(time_tc), dtype=bool)
+                    for start_abs, end_abs in gap_intervals:
+                        start_rel = start_abs - time_offset
+                        end_rel = end_abs - time_offset
+                        gap_mask = (time_tc >= start_rel) & (time_tc <= end_rel)
+                        keep_mask &= ~gap_mask
+                    time_tc = time_tc[keep_mask]
+                    tc_horizontal = tc_horizontal[keep_mask]
+                    tc_lateral = tc_lateral[keep_mask]
+                    tc_vertical = tc_vertical[keep_mask]
+                    tc_forward = tc_forward[keep_mask]
             else:
                 # 如果没有数据在时间范围内，清空数据
                 time_tc = np.array([])
@@ -187,15 +225,19 @@ def plot_errors(common_timelc, diff_datalc, common_timetc, diff_datatc, common_t
                 gnss_lateral = gnss_lateral[gnss_indices]
                 gnss_vertical = gnss_vertical[gnss_indices]
                 gnss_forward = gnss_forward[gnss_indices]
-                # gap 区间内填充固定值 10
+                # gap区间内的数据完全排除
                 if gap_intervals is not None and len(gap_intervals) > 0 and len(time_gnss) > 0:
-                    for start, end in gap_intervals:
-                        for i in range(len(time_gnss)):
-                            if start <= time_gnss[i] <= end:
-                                gnss_horizontal[i] = 10.0
-                                gnss_lateral[i] = 10.0
-                                gnss_vertical[i] = 10.0
-                                gnss_forward[i] = 10.0
+                    keep_mask = np.ones(len(time_gnss), dtype=bool)
+                    for start_abs, end_abs in gap_intervals:
+                        start_rel = start_abs - time_offset
+                        end_rel = end_abs - time_offset
+                        gap_mask = (time_gnss >= start_rel) & (time_gnss <= end_rel)
+                        keep_mask &= ~gap_mask
+                    time_gnss = time_gnss[keep_mask]
+                    gnss_horizontal = gnss_horizontal[keep_mask]
+                    gnss_lateral = gnss_lateral[keep_mask]
+                    gnss_vertical = gnss_vertical[keep_mask]
+                    gnss_forward = gnss_forward[keep_mask]
             else:
                 # 如果没有数据在时间范围内，清空数据
                 time_gnss = np.array([])
@@ -238,7 +280,15 @@ def plot_errors(common_timelc, diff_datalc, common_timetc, diff_datatc, common_t
         y_margin = y_range * 0.1  # 添加10%的边距
         axes1[0].set_ylim([np.min(all_horizontal_data) - y_margin, np.max(all_horizontal_data) + y_margin])
 
-    # 只在第一个子图显示图例
+    # 添加gap阴影区域
+    if gap_intervals is not None and len(gap_intervals) > 0:
+        y_lim = axes1[0].get_ylim()
+        _add_gap_shadows(axes1[0], gap_intervals, time_offset, y_lim[0], y_lim[1])
+
+    # 只在第一个子图显示图例（如果有gap，添加gap图例）
+    if gap_intervals is not None and len(gap_intervals) > 0:
+        gap_patch = Patch(facecolor='gray', alpha=0.3, label='Gap Region')
+        axes1[0].handles = [gap_patch]
     axes1[0].legend()
 
     # 绘制横向误差（第二行）
@@ -267,6 +317,11 @@ def plot_errors(common_timelc, diff_datalc, common_timetc, diff_datatc, common_t
         y_range = np.max(all_lateral_data) - np.min(all_lateral_data)
         y_margin = y_range * 0.1  # 添加10%的边距
         axes1[1].set_ylim([np.min(all_lateral_data) - y_margin, np.max(all_lateral_data) + y_margin])
+
+    # 添加gap阴影区域
+    if gap_intervals is not None and len(gap_intervals) > 0:
+        y_lim = axes1[1].get_ylim()
+        _add_gap_shadows(axes1[1], gap_intervals, time_offset, y_lim[0], y_lim[1])
 
     # 不显示图例
     axes1[1].legend().set_visible(False)
@@ -298,6 +353,11 @@ def plot_errors(common_timelc, diff_datalc, common_timetc, diff_datatc, common_t
         y_margin = y_range * 0.1  # 添加10%的边距
         axes1[2].set_ylim([np.min(all_forward_data) - y_margin, np.max(all_forward_data) + y_margin])
 
+    # 添加gap阴影区域
+    if gap_intervals is not None and len(gap_intervals) > 0:
+        y_lim = axes1[2].get_ylim()
+        _add_gap_shadows(axes1[2], gap_intervals, time_offset, y_lim[0], y_lim[1])
+
     # 不显示图例
     axes1[2].legend().set_visible(False)
 
@@ -327,6 +387,11 @@ def plot_errors(common_timelc, diff_datalc, common_timetc, diff_datatc, common_t
         y_range = np.max(all_vertical_data) - np.min(all_vertical_data)
         y_margin = y_range * 0.1  # 添加10%的边距
         axes1[3].set_ylim([np.min(all_vertical_data) - y_margin, np.max(all_vertical_data) + y_margin])
+
+    # 添加gap阴影区域
+    if gap_intervals is not None and len(gap_intervals) > 0:
+        y_lim = axes1[3].get_ylim()
+        _add_gap_shadows(axes1[3], gap_intervals, time_offset, y_lim[0], y_lim[1])
 
     # 不显示图例
     axes1[3].legend().set_visible(False)
@@ -364,7 +429,15 @@ def plot_errors(common_timelc, diff_datalc, common_timetc, diff_datatc, common_t
             y_margin = y_range * 0.1  # 添加10%的边距
             axes2[0].set_ylim([np.min(all_horizontal_data_no_gnss) - y_margin, np.max(all_horizontal_data_no_gnss) + y_margin])
 
-        # 只在第一个子图显示图例
+        # 添加gap阴影区域
+        if gap_intervals is not None and len(gap_intervals) > 0:
+            y_lim = axes2[0].get_ylim()
+            _add_gap_shadows(axes2[0], gap_intervals, time_offset, y_lim[0], y_lim[1])
+
+        # 只在第一个子图显示图例（如果有gap，添加gap图例）
+        if gap_intervals is not None and len(gap_intervals) > 0:
+            gap_patch = Patch(facecolor='gray', alpha=0.3, label='Gap Region')
+            axes2[0].handles = [gap_patch]
         axes2[0].legend()
 
         # 绘制不带GNSS的横向误差（第二行）
@@ -388,6 +461,11 @@ def plot_errors(common_timelc, diff_datalc, common_timetc, diff_datatc, common_t
             y_range = np.max(all_lateral_data_no_gnss) - np.min(all_lateral_data_no_gnss)
             y_margin = y_range * 0.1  # 添加10%的边距
             axes2[1].set_ylim([np.min(all_lateral_data_no_gnss) - y_margin, np.max(all_lateral_data_no_gnss) + y_margin])
+
+        # 添加gap阴影区域
+        if gap_intervals is not None and len(gap_intervals) > 0:
+            y_lim = axes2[1].get_ylim()
+            _add_gap_shadows(axes2[1], gap_intervals, time_offset, y_lim[0], y_lim[1])
 
         # 不显示图例
         axes2[1].legend().set_visible(False)
@@ -414,6 +492,11 @@ def plot_errors(common_timelc, diff_datalc, common_timetc, diff_datatc, common_t
             y_margin = y_range * 0.1  # 添加10%的边距
             axes2[2].set_ylim([np.min(all_forward_data_no_gnss) - y_margin, np.max(all_forward_data_no_gnss) + y_margin])
 
+        # 添加gap阴影区域
+        if gap_intervals is not None and len(gap_intervals) > 0:
+            y_lim = axes2[2].get_ylim()
+            _add_gap_shadows(axes2[2], gap_intervals, time_offset, y_lim[0], y_lim[1])
+
         # 不显示图例
         axes2[2].legend().set_visible(False)
 
@@ -438,6 +521,11 @@ def plot_errors(common_timelc, diff_datalc, common_timetc, diff_datatc, common_t
             y_range = np.max(all_vertical_data_no_gnss) - np.min(all_vertical_data_no_gnss)
             y_margin = y_range * 0.1  # 添加10%的边距
             axes2[3].set_ylim([np.min(all_vertical_data_no_gnss) - y_margin, np.max(all_vertical_data_no_gnss) + y_margin])
+
+        # 添加gap阴影区域
+        if gap_intervals is not None and len(gap_intervals) > 0:
+            y_lim = axes2[3].get_ylim()
+            _add_gap_shadows(axes2[3], gap_intervals, time_offset, y_lim[0], y_lim[1])
 
         # 不显示图例
         axes2[3].legend().set_visible(False)

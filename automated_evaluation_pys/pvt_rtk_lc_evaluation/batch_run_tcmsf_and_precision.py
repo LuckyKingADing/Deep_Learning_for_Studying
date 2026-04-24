@@ -32,41 +32,53 @@ import toml
 
 def run_command(command: list, description: str = "") -> bool:
     """
-    执行shell命令
-    
+    执行shell命令（实时输出）
+
     参数:
         command: 命令及其参数列表
         description: 命令描述（用于日志）
-    
+
     返回:
         命令是否执行成功
     """
     print(f"\n[执行命令] {description}")
     print(f"  命令: {' '.join(command)}")
-    
+    print(f"[输出] (实时显示)")
+    print("-" * 80)
+
     try:
-        result = subprocess.run(
+        # 使用 Popen 实时输出，不缓存
+        process = subprocess.Popen(
             command,
-            check=True,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
+            stderr=subprocess.STDOUT,  # 合并 stderr 到 stdout
+            text=True,
+            bufsize=1,  # 行缓冲
+            universal_newlines=True
         )
-        
-        if result.stdout:
-            print(f"[标准输出]\n{result.stdout}")
-        if result.stderr:
-            print(f"[标准错误]\n{result.stderr}")
-        
-        print(f"[成功] 命令执行完成")
-        return True
+
+        # 实时读取并打印输出
+        for line in process.stdout:
+            print(line, end='')
+
+        # 等待进程完成
+        return_code = process.wait()
+
+        print("-" * 80)
+
+        if return_code == 0:
+            print(f"[成功] 命令执行完成")
+            return True
+        else:
+            print(f"[错误] 命令执行失败，返回码: {return_code}")
+            return False
+
     except subprocess.CalledProcessError as e:
-        print(f"[错误] 命令执行失败")
-        print(f"[错误] 返回码: {e.returncode}")
-        if e.stdout:
-            print(f"[标准输出]\n{e.stdout}")
-        if e.stderr:
-            print(f"[错误] 错误信息:\n{e.stderr}")
+        print(f"[错误] 命令执行异常")
+        print(f"[错误] 错误信息:\n{e}")
+        return False
+    except Exception as e:
+        print(f"[错误] 命令执行异常: {e}")
         return False
 
 
