@@ -85,7 +85,7 @@ def run_command(command: list, description: str = "") -> bool:
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(
-        description="串联执行 TCMSF 处理、精度评估和精度统计聚合",
+        description="串联执行数据压缩、TCMSF 处理、精度评估和精度统计聚合",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
@@ -93,15 +93,16 @@ def main():
   python batch_run_tcmsf_and_precision.py /path/to/config.toml
 
 流程说明:
+  0. 数据压缩（可选，skip_compression=true时跳过）
   1. 从配置文件读取 input_path（原始数据集路径）
   2. 执行 batch_run_tcmsf.py，将原始数据集处理为 TCMSF 结果
   3. 执行 batch_run_precision_head_horizontal.py，对 TCMSF 结果进行精度评估
      （精度评估内部会自动运行 gap_detection.py 检测大段缺失）
   4. 执行 aggregate_precision_statistics.py，聚合精度统计结果
 
-说明:
-  gap 检测的阈值通过配置文件中的 gap_threshold 字段控制，
-  默认 5.0 秒，设置为 null 可跳过检测。
+配置说明:
+  skip_compression = true  # 跳过数据压缩（重跑时数据已存在）
+  skip_compression = false # 执行数据压缩（默认）
         """
     )
     
@@ -146,10 +147,45 @@ def main():
     # 获取输出路径（默认与输入路径相同）
     output_path_str = config.get('output_base_dir', input_path_str)
     output_path = Path(output_path_str)
-    
+
     # 获取当前脚本所在目录
     current_dir = Path(__file__).parent
-    
+
+    # 步骤0: 数据压缩（可选）
+    skip_compression = config.get('skip_compression', False)
+
+    if not skip_compression:
+        print(f"\n{'='*80}")
+        print("步骤 0: 执行数据压缩")
+        print(f"{'='*80}")
+
+        compression_script_str = config.get('compression_script', '')
+
+        if compression_script_str:
+            compression_script = Path(compression_script_str)
+            if compression_script.exists():
+                print(f"  压缩脚本: {compression_script}")
+                print(f"  输入路径: {original_data_path}")
+                print(f"{'='*80}\n")
+
+                # 执行压缩脚本
+                compression_success = run_command(
+                    [sys.executable, str(compression_script)],
+                    description="执行数据压缩脚本"
+                )
+
+                if not compression_success:
+                    print(f"\n[警告] 数据压缩失败，继续执行后续步骤...")
+            else:
+                print(f"[警告] 压缩脚本不存在: {compression_script}")
+                print(f"[信息] 跳过数据压缩步骤，继续执行...")
+        else:
+            print(f"[信息] 未配置压缩脚本路径，跳过数据压缩步骤")
+    else:
+        print(f"\n{'='*80}")
+        print("[跳过] 数据压缩步骤 (skip_compression = true)")
+        print(f"{'='*80}")
+
     # 步骤1: 执行 batch_run_tcmsf.py
     print(f"\n{'='*80}")
     print("步骤 1: 执行 TCMSF 处理")

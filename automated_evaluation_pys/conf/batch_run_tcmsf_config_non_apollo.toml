@@ -3,6 +3,7 @@
 # 输入路径，包含多个数据集子目录
 input_path = "/mnt/d/dockers/rt/rtk_pvt/2026/"
 
+# ==================== TCMSF 可执行文件配置 ====================
 # TCMSF可执行文件路径   绝对路径
 tcmsf_bin = "/home/wufengbo/workcode/repos/cnoa/byd_adas_app/modules/util/automated_evaluation_pys/tcmsf/ota630_lc/tcmsf_offline/bin/TCMSF"
 
@@ -53,6 +54,15 @@ skip_dirs = ["result","batch_run_logs"]
 # ==================== 精度评估全局配置 ====================
 # 是否只评估水平误差（1=仅水平，0=水平和垂直）
 horizontal_only = 0
+
+# ==================== 数据压缩配置 ====================
+# 是否跳过数据压缩步骤（重跑时如果数据已压缩，可设置为true跳过）
+# true = 跳过压缩，直接处理已压缩的数据
+# false = 执行压缩步骤（默认）
+skip_compression = false
+
+# 数据压缩脚本路径（仅在skip_compression=false时使用）
+compression_script = "/mnt/workspace/user/lijianghua/scripts/oss/oss_data_split.py"
 
 # ==================== datasets 配置（新增）====================
 # datasets 配置：每个 dataset 共享相同的 gnss_oem_type 和 vehicle_info_file

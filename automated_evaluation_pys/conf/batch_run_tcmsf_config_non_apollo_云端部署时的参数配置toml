@@ -57,6 +57,15 @@ skip_dirs = ["result","batch_run_logs"]
 # 是否只评估水平误差（1=仅水平，0=水平和垂直）
 horizontal_only = 0
 
+# ==================== 数据压缩配置 ====================
+# 是否跳过数据压缩步骤（重跑时如果数据已压缩，可设置为true跳过）
+# true = 跳过压缩，直接处理已压缩的数据
+# false = 执行压缩步骤（默认）
+skip_compression = false
+
+# 数据压缩脚本路径（仅在skip_compression=false时使用）
+compression_script = "/mnt/workspace/user/lijianghua/scripts/oss/oss_data_split.py"
+
 # ==================== datasets 配置（新增）====================
 # datasets 配置：每个 dataset 共享相同的 gnss_oem_type 和 vehicle_info_file
 # input_path 下每个 name 对应一个子目录，该子目录下包含实际需要处理的子数据集
