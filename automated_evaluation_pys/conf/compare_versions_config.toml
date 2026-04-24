@@ -1,0 +1,84 @@
+# 版本对比配置文件
+#
+# 使用说明：
+# 1. 配置 version_a_dir 和 version_b_dir 为两个版本的输出目录
+# 2. 配置 version_a_label 和 version_b_label 为版本标签
+# 3. compare_schemes/metrics/scenes 为空 [] 时自动对比全部
+# 4. 输出目录自动生成: compare_versions/<时间戳>_<版本A>_vs_<版本B>/
+
+# ==================== 版本配置 ====================
+# 版本A的输出目录（包含多个数据集子目录）
+# 目录结构示例（支持多层子数据集）:
+#   ota630_c80c32da/
+#   ├── 20260410/
+#   │   ├── dataset1/results/position_precision.txt
+#   │   └── dataset2/results/position_precision.txt
+#   └── 20260417/
+#       ├── dataset3/results/position_precision.txt
+#       └── dataset4/results/position_precision.txt
+version_a_dir = "/mnt/data/oss-byd-wl-roadtest/users/localization/evaluation/ota630_c80c32da_0424"
+
+# 版本B的输出目录
+version_b_dir = "/mnt/data/oss-byd-wl-roadtest/users/localization/evaluation/ota630_c80c32da_0423"
+
+# 版本A标签（用于报告显示，也用于输出目录命名）
+version_a_label = "c80c32da_0424"
+
+# 版本B标签（用于报告显示，也用于输出目录命名）
+version_b_label = "c80c32da_0423"
+
+# ==================== 对比方案配置 ====================
+# 要对比的方案列表
+# 可选: pvtlc, rtklc, pvttc, rtktc
+# 如果为空 [] 则自动检测并对比所有可用方案
+compare_schemes = ["pvtlc", "rtklc"]
+
+# ==================== 精度指标配置 ====================
+# 要对比的精度指标
+# 可选指标列表:
+#   - H-rms     (水平位置均方根误差)
+#   - H-CEP95   (水平位置95%圆误差概率)
+#   - H-CEP99   (水平位置99%圆误差概率)
+#   - H-max     (水平位置最大误差)
+#   - L-rms     (横向均方根误差)
+#   - L-CEP95   (横向95%圆误差概率)
+#   - L-CEP99   (横向99%圆误差概率)
+#   - L-max     (横向最大误差)
+#   - F-rms     (前进方向均方根误差)
+#   - F-CEP95   (前进方向95%圆误差概率)
+#   - F-CEP99   (前进方向99%圆误差概率)
+#   - F-max     (前进方向最大误差)
+#   - V-rms     (高程均方根误差)
+#   - V-CEP95   (高程95%圆误差概率)
+#   - V-CEP99   (高程99%圆误差概率)
+#   - V-max     (高程最大误差)
+# 如果为空 [] 则对比所有指标
+compare_metrics = ["H-rms", "H-CEP95", "H-CEP99", "H-max", "L-rms", "L-CEP95", "L-CEP99", "L-max", "F-rms", "F-CEP95", "F-CEP99", "F-max", "V-rms", "V-CEP95", "V-CEP99", "V-max"]
+
+# ==================== 场景配置 ====================
+# 要对比的场景类型
+# 可选场景列表（从精度文件中实际存在的场景）:
+#   - 全部      (所有场景汇总)
+#   - 正常      (正常场景)
+#   - 开阔场景  (开阔环境)
+#   - 半遮挡    (单侧遮挡)
+#   - 双边遮挡  (双侧遮挡)
+#   - 障点场景  (复杂环境)
+#   - 隧道      (隧道环境)
+#   - 转发器    (转发器区域)
+# 如果为空 [] 则从精度文件中自动检测所有场景
+compare_scenes = ["全部", "正常", "开阔场景", "半遮挡", "双边遮挡", "隧道", "转发器"]
+
+# ==================== 输出配置 ====================
+# 输出基础目录（对比报告将保存在此目录下的子文件夹中）
+# 如果为空，则使用版本目录的父目录，并在其中创建 compare_versions 子目录
+# 输出子目录命名格式: compare_versions/<时间戳>_<版本A标签>_vs_<版本B标签>/
+# 例如: compare_versions/20260424_153000_c80c32da_vs_new_algorithm/
+output_base_dir = "/mnt/data/oss-byd-wl-roadtest/users/localization/evaluation"
+
+# ==================== 选项配置 ====================
+# 是否显示详细输出
+verbose = true
+
+# 是否在报告中包含缺失说明
+include_missing_notes = true
