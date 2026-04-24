@@ -61,6 +61,7 @@ class GapDetector:
         self.vehicle_freq_hz = self.config.get("vehicle_freq_hz", 100)  # Vehicle频率（实际为100Hz）
         self.fusion_freq_hz = self.config.get("fusion_freq_hz", 5)
         self.time_tolerance = self.config.get("time_tolerance", 0.5)
+        self.stabilization_sec = self.config.get("stabilization_sec", 1.0)
 
         self.verbose = self.config.get("verbose", False)
 
@@ -71,6 +72,7 @@ class GapDetector:
         self.vehicle_times_gps: np.ndarray = None
         self.fusion_times_gps: Dict[str, np.ndarray] = {}
         self.gap_intervals: Dict[str, List[Tuple[float, float]]] = {}
+        self._raw_gap_intervals: Dict[str, List[Tuple[float, float]]] = {}  # 原始（未扩展）区间
 
         # 新增：各类时间戳本身的缺失区间
         self.imu_timestamp_gaps: List[Tuple[float, float]] = []
@@ -222,7 +224,27 @@ class GapDetector:
 
         return self.unix_to_gps_map[nearest_key]
 
-    def _load_sensor_gps_times(self) -> bool:
+    def _expand_gaps(self, gaps: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
+        """
+        将每个 gap 区间左右各扩展 stabilization_sec 秒，
+        确保融合恢复期的大误差值也被排除。
+
+        Args:
+            gaps: 原始 gap 区间列表 [(start, end), ...]
+
+        Returns:
+            扩展后的 gap 区间列表
+        """
+        if not gaps or self.stabilization_sec <= 0:
+            return gaps
+
+        expanded = []
+        for start, end in gaps:
+            new_start = max(0, start - self.stabilization_sec)
+            new_end = end + self.stabilization_sec
+            expanded.append((new_start, new_end))
+
+        return expanded
         """
         加载 IMU 和 vehicle 的 GPS 秒时间数组
 
@@ -603,12 +625,18 @@ class GapDetector:
             merged_gaps = self._merge_overlapping_gaps(all_raw_gaps)
 
             if merged_gaps:
-                all_gaps[fusion_name] = merged_gaps
-                print(f"  合计大段缺失: {len(merged_gaps)} 段")
-                for start, end in merged_gaps:
-                    print(f"    GPS秒 {start:.3f} ~ {end:.3f} (持续 {end - start:.2f}s)")
+                # 应用恢复稳定期扩展（左右各加 stabilization_sec 秒）
+                expanded_gaps = self._expand_gaps(merged_gaps)
+                all_gaps[fusion_name] = expanded_gaps
+                self._raw_gap_intervals[fusion_name] = merged_gaps
+                print(f"  合计大段缺失: {len(merged_gaps)} 段（原始）→ {len(expanded_gaps)} 段（扩展后 ±{self.stabilization_sec}s）")
+                for (r_start, r_end), (e_start, e_end) in zip(merged_gaps, expanded_gaps):
+                    raw_dur = r_end - r_start
+                    ext_dur = e_end - e_start
+                    print(f"    GPS {r_start:.3f} ~ {r_end:.3f} ({raw_dur:.2f}s) → [{e_start:.3f} ~ {e_end:.3f} ({ext_dur:.2f}s)]")
             else:
                 all_gaps[fusion_name] = []
+                self._raw_gap_intervals[fusion_name] = []
                 print(f"  未检测到大段缺失")
 
         self.gap_intervals = all_gaps
@@ -687,6 +715,7 @@ class GapDetector:
                 "vehicle_freq_hz": self.vehicle_freq_hz,
                 "fusion_freq_hz": self.fusion_freq_hz,
                 "time_tolerance_sec": self.time_tolerance,
+                "stabilization_sec": self.stabilization_sec,
             }
         }
 
@@ -705,12 +734,14 @@ class GapDetector:
                 "count": len(self.vehicle_timestamp_gaps),
             }
 
-        # 保存融合结果缺失
+        # 保存融合结果缺失（扩展后区间用于绘图/统计，原始区间供参考）
         for fusion_name, intervals in self.gap_intervals.items():
             safe_name = fusion_name.replace("-", "_").replace(".", "_")
+            raw_intervals = self._raw_gap_intervals.get(fusion_name, [])
             gap_config[f"gap_intervals_{safe_name}"] = {
                 "fusion_type": fusion_name,
                 "gps_ranges": [[float(start), float(end)] for start, end in intervals],
+                "raw_gps_ranges": [[float(start), float(end)] for start, end in raw_intervals],
                 "count": len(intervals),
             }
 
@@ -741,7 +772,7 @@ class GapDetector:
                 f.write(f"子数据集: {self.subdataset_dir.name}\n")
                 f.write(f"检测阈值: >= {self.gap_threshold_sec}s 判定为大段缺失\n")
                 f.write(f"IMU频率: {self.imu_freq_hz}Hz  Vehicle频率: {self.vehicle_freq_hz}Hz  Fusion频率: {self.fusion_freq_hz}Hz\n")
-                f.write(f"时间容差: {self.time_tolerance}s\n")
+                f.write(f"时间容差: {self.time_tolerance}s  恢复稳定期扩展: ±{self.stabilization_sec}s\n")
                 f.write("=" * 60 + "\n\n")
 
                 #传感器时间戳缺失
@@ -776,17 +807,19 @@ class GapDetector:
 
                 f.write("\n")
 
-                # 合计缺失（传感器匹配缺失 + 时间戳缺失）
-                f.write("【合计缺失（用于精度评估排除）】\n")
+                # 合计缺失（传感器匹配缺失 + 时间戳缺失，已应用恢复稳定期扩展）
+                f.write("【合计缺失（用于精度评估排除，已扩展±{:.1f}s）】\n".format(self.stabilization_sec))
                 f.write("-" * 60 + "\n")
                 total_gaps = 0
                 for fusion_name, intervals in self.gap_intervals.items():
+                    raw_intervals = self._raw_gap_intervals.get(fusion_name, [])
                     f.write(f"[{fusion_name}]\n")
                     if intervals:
-                        f.write(f"  大段缺失段数: {len(intervals)}\n")
+                        f.write(f"  大段缺失段数: {len(intervals)}（扩展后）\n")
                         total_gaps += len(intervals)
-                        for i, (start, end) in enumerate(intervals, 1):
-                            f.write(f"  段{i}: GPS秒 {start:.3f} ~ {end:.3f}持续 {end - start:.2f}s\n")
+                        for i, (raw, ext) in enumerate(zip(raw_intervals, intervals), 1):
+                            f.write(f"  段{i}: GPS {raw[0]:.3f} ~ {raw[1]:.3f} ({raw[1]-raw[0]:.2f}s)")
+                            f.write(f" → [{ext[0]:.3f} ~ {ext[1]:.3f} ({ext[1]-ext[0]:.2f}s)]\n")
                     else:
                         f.write("  无大段缺失\n")
                     f.write("\n")
@@ -920,6 +953,14 @@ def main():
         default=None,
         dest="time_tolerance",
         help=f"时间容差，秒（默认: 0.5）"
+    )
+
+    parser.add_argument(
+        "--stabilization",
+        type=float,
+        default=None,
+        dest="stabilization_sec",
+        help=f"gap恢复稳定所需时间，左右各扩展秒数（默认: 1.0）"
     )
 
     parser.add_argument(
