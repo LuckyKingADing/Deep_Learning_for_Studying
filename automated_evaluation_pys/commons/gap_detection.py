@@ -245,6 +245,8 @@ class GapDetector:
             expanded.append((new_start, new_end))
 
         return expanded
+
+    def _load_sensor_gps_times(self) -> bool:
         """
         加载 IMU 和 vehicle 的 GPS 秒时间数组
 
