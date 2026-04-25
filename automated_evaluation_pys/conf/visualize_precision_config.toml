@@ -1,89 +1,19 @@
-# 精度指标可视化配置文件
-#
-# 使用说明：
-# 1. 配置 input_dir 为版本的输出目录
-# 2. 配置 version_label 为版本标签
-# 3. 选择要可视化的方案和指标
-# 4. 输出目录自动生成: visualize_precision/<时间戳>_<版本标签>/
-
-# ==================== 输入配置 ====================
-# 版本输出目录（包含多个数据集子目录）
-# 目录结构示例:
-#   ota630_c80c32da/
-#   ├── 20260410/
-#   │   ├── dataset1/results/position_precision.txt
-#   │   └── dataset2/results/position_precision.txt
-#   └── 20260417/
-#       ├── dataset3/results/position_precision.txt
-#       └── dataset4/results/position_precision.txt
-input_dir = "/mnt/data/oss-byd-wl-roadtest/users/localization/evaluation/ota630_c80c32da_0424"
-
-# 版本标签（用于报告显示和输出目录命名）
+# 测试配置：单个数据集 0424-下午 正常
+# 可用方案: lc (pvtlc), tc (rtklc), gnss
+input_dir = "/Users/ading/Code_Projects/Deep_Learning_for_Studying/automated_evaluation_pys/示例子数据集部分结果/0424-下午 正常"
 version_label = "c80c32da_0424"
 
-# ==================== 可视化方案配置 ====================
-# 要可视化的方案列表
-# 可选: pvtlc, rtklc, pvttc, rtktc
-# 如果为空 [] 则自动检测并可视化所有可用方案
-visualize_schemes = ["pvtlc", "rtklc"]
+# 要可视化的方案（留空则全部显示）
+# 可选: ["lc"], ["tc"], ["lc", "tc"], ["lc", "tc", "gnss"]
+visualize_schemes = ["lc", ]
 
-# ==================== 精度指标配置 ====================
-# 要可视化的精度指标
-# 可选指标列表:
-#   - H-rms     (水平位置均方根误差)
-#   - H-CEP95   (水平位置95%圆误差概率)
-#   - H-CEP99   (水平位置99%圆误差概率)
-#   - H-max     (水平位置最大误差)
-#   - L-rms     (横向均方根误差)
-#   - L-CEP95   (横向95%圆误差概率)
-#   - L-CEP99   (横向99%圆误差概率)
-#   - L-max     (横向最大误差)
-#   - F-rms     (前进方向均方根误差)
-#   - F-CEP95   (前进方向95%圆误差概率)
-#   - F-CEP99   (前进方向99%圆误差概率)
-#   - F-max     (前进方向最大误差)
-#   - V-rms     (高程均方根误差)
-#   - V-CEP95   (高程95%圆误差概率)
-#   - V-CEP99   (高程99%圆误差概率)
-#   - V-max     (高程最大误差)
-# 如果为空 [] 则可视化所有指标
-visualize_metrics = ["H-rms", "H-CEP95", "H-CEP99", "H-max", "L-rms", "L-CEP95", "L-CEP99", "L-max", "F-rms", "F-CEP95", "F-CEP99", "F-max", "V-rms", "V-CEP95", "V-CEP99", "V-max"]
+# 要可视化的场景（留空则自动检测）
+visualize_scenes = []
 
-# ==================== 场景配置 ====================
-# 要可视化的场景类型
-# 可选场景列表（从精度文件中实际存在的场景）:
-#   - 全部      (所有场景汇总)
-#   - 正常      (正常场景)
-#   - 开阔场景  (开阔环境)
-#   - 半遮挡    (单侧遮挡)
-#   - 双边遮挡  (双侧遮挡)
-#   - 隧道      (隧道环境)
-#   - 转发器    (转发器区域)
-# 如果为空 [] 则从精度文件中自动检测所有场景
-visualize_scenes = ["全部", "正常", "开阔场景", "半遮挡", "双边遮挡", "隧道", "转发器"]
+# 可视化类型
+# bar = 每个指标生成独立的条形图
+# table = 文本汇总表
+visualize_types = ["bar", "table"]
 
-# ==================== 输出配置 ====================
-# 输出基础目录（可视化结果将保存在此目录下的子文件夹中）
-# 如果为空，则使用输入目录的父目录，并在其中创建 visualize_precision 子目录
-# 输出子目录命名格式: visualize_precision/<时间戳>_<版本标签>/
-# 例如: visualize_precision/20260424_160000_c80c32da_0424/
-output_base_dir = "/mnt/data/oss-byd-wl-roadtest/users/localization/evaluation"
-
-# ==================== 可视化类型配置 ====================
-# 可视化图表类型
-# 可选: bar, radar, heatmap, table
-# bar = 柱状图（各场景指标对比）
-# radar = 雷达图（多维度指标展示）
-# heatmap = 热力图（场景-指标矩阵）
-# table = 表格（文本格式汇总）
-visualize_types = ["bar", "radar", "heatmap", "table"]
-
-# ==================== 选项配置 ====================
-# 是否显示详细输出
-verbose = true
-
-# 图片格式（png, svg, pdf）
-image_format = "png"
-
-# 图片尺寸（宽度, 高度）英寸
-figure_size = [12, 8]
+# 输出基础目录
+output_base_dir = "/Users/ading/Code_Projects/Deep_Learning_for_Studying/automated_evaluation_pys/示例子数据集部分结果"
