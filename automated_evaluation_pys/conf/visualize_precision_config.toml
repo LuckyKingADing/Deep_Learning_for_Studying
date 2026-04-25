@@ -5,7 +5,7 @@ version_label = "c80c32da_0424"
 
 # 要可视化的方案（留空则全部显示）
 # 可选: ["lc"], ["tc"], ["lc", "tc"], ["lc", "tc", "gnss"]
-visualize_schemes = ["lc", ]
+visualize_schemes = ["lc","tc","gnss" ]
 
 # 要可视化的场景（留空则自动检测）
 visualize_scenes = []
