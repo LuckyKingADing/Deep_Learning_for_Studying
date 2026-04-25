@@ -3,17 +3,16 @@
 """
 精度指标可视化工具：将融合定位精度统计结果可视化展示
 
-功能说明：
-1. 支持多种可视化类型：柱状图、雷达图、热力图、表格
-2. 支持多方案对比（pvtlc、rtklc）
-3. 支持多场景、多指标可视化
-4. 自动生成带时间戳的输出目录
+设计原则：
+- 单个数据集：直接定位 position_precision.txt
+- X轴 = 场景（7个场景分组）
+- 分组柱状图：每个场景下3根柱子（pvtlc / rtklc / GNSS）
+- 4行x4列布局：行=维度(H/L/F/V)，列=指标类型(rms/CEP95/CEP99/max)
+- 每个方案各自生成独立图表
+- 美观简洁，支持中文字体
 
 使用方法：
     python visualize_precision.py <配置文件路径>
-
-示例：
-    python visualize_precision.py ../conf/visualize_precision_config.toml
 """
 
 import os
@@ -21,7 +20,7 @@ import sys
 import argparse
 import re
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 
 try:
@@ -33,7 +32,7 @@ except ImportError:
 try:
     import matplotlib.pyplot as plt
     import matplotlib
-    matplotlib.use('Agg')  # 非交互式后端
+    matplotlib.use('Agg')
     import numpy as np
     from matplotlib.font_manager import FontManager
 except ImportError:
@@ -42,436 +41,501 @@ except ImportError:
     sys.exit(1)
 
 
+# ---- 中文字体设置 ----
 def setup_chinese_font():
-    """设置中文字体，尝试多种可用字体"""
-    # 尝试的中文字体列表（按优先级）
     chinese_fonts = [
-        'SimHei',        # Windows 黑体
-        'WenQuanYi Micro Hei',  # Linux 常见中文字体
-        'WenQuanYi Zen Hei',    # Linux 另一个常见中文字体
-        'Noto Sans CJK SC',     # Google Noto 字体
-        'Noto Sans CJK',        # Google Noto 字体简体
-        'Source Han Sans CN',   # 思源黑体
-        'Droid Sans Fallback',  # Android 字体
-        'Microsoft YaHei',      # 微软雅黑
-        'PingFang SC',          # macOS 苹方
-        'Heiti SC',             # macOS 黑体
-        'STHeiti',              # macOS 华文黑体
-        'Arial Unicode MS',     # Unicode 字体
+        'PingFang SC', 'STHeiti', 'Heiti SC', 'Hiragino Sans GB',
+        'Microsoft YaHei', 'SimHei', 'WenQuanYi Micro Hei',
+        'WenQuanYi Zen Hei', 'Noto Sans CJK SC', 'Noto Sans CJK',
+        'Source Han Sans CN', 'Droid Sans Fallback', 'Arial Unicode MS',
     ]
-
-    # 获取系统可用字体
     fm = FontManager()
-    available_fonts = set([f.name for f in fm.ttflist])
-
-    # 找到可用的中文字体
-    font_found = None
+    available = set(f.name for f in fm.ttflist)
     for font in chinese_fonts:
-        if font in available_fonts:
-            font_found = font
-            break
-
-    if font_found:
-        plt.rcParams['font.sans-serif'] = [font_found, 'DejaVu Sans']
-        plt.rcParams['axes.unicode_minus'] = False
-        print(f"[信息] 使用中文字体: {font_found}")
-        return True
-    else:
-        # 没有找到中文字体，使用默认字体
-        print("[警告] 未找到中文字体，图表可能显示方框")
-        print("[提示] 可安装中文字体: sudo apt install fonts-wqy-microhei fonts-wqy-zenhei")
-        plt.rcParams['font.sans-serif'] = ['DejaVu Sans']
-        plt.rcParams['axes.unicode_minus'] = False
-        return False
+        if font in available:
+            plt.rcParams['font.sans-serif'] = [font, 'DejaVu Sans']
+            plt.rcParams['axes.unicode_minus'] = False
+            print(f"[信息] 使用中文字体: {font}")
+            return True
+    print("[警告] 未找到中文字体，将使用英文标签")
+    plt.rcParams['font.sans-serif'] = ['DejaVu Sans']
+    plt.rcParams['axes.unicode_minus'] = False
+    return False
 
 
-# 场景和指标的英文映射（用于无中文字体时）
+# ---- 标签映射 ----
 SCENE_EN_MAP = {
-    '全部': 'All',
-    '正常': 'Normal',
-    '开阔场景': 'Open',
-    '半遮挡': 'Half-block',
-    '双边遮挡': 'Double-block',
-    '隧道': 'Tunnel',
-    '转发器': 'Repeater',
-    '难点场景': 'Complex',
-    '高速': 'Highway',
-    '常规城市': 'Urban',
-    '林荫道': 'Tree-road',
-    '高架': 'Overpass',
-    '城市峡谷': 'Urban-canyon',
-    '长隧道': 'Long-tunnel',
+    '全部': 'All', '正常': 'Normal', '开阔场景': 'Open Area',
+    '半遮挡': 'Half-block', '双边遮挡': 'Double-block',
+    '隧道': 'Tunnel', '转发器': 'Repeater', '难点场景': 'Complex',
+    '高速': 'Highway', '常规城市': 'Urban', '林荫道': 'Tree-road',
+    '高架': 'Overpass', '城市峡谷': 'Urban Canyon', '长隧道': 'Long Tunnel',
 }
 
-# 全局变量：是否找到中文字体
 HAS_CHINESE_FONT = False
 
 
 def get_label(text: str) -> str:
-    """获取标签文本，如果有中文字体返回原文，否则返回英文"""
-    if HAS_CHINESE_FONT:
-        return text
-    return SCENE_EN_MAP.get(text, text)
+    return text if HAS_CHINESE_FONT else SCENE_EN_MAP.get(text, text)
 
 
-class StatisticsData:
-    """单个场景的统计数据"""
+# ---- 维度与配色配置 ----
+METRIC_DISPLAY_NAMES = {
+    # Horizontal
+    'H-rms': 'RMS_Horizontal',
+    'H-CEP95': 'CEP95_Horizontal',
+    'H-CEP99': 'CEP99_Horizontal',
+    'H-max': 'Max_Horizontal',
+    # Lateral
+    'L-rms': 'RMS_Lateral',
+    'L-CEP95': 'CEP95_Lateral',
+    'L-CEP99': 'CEP99_Lateral',
+    'L-max': 'Max_Lateral',
+    # Forward
+    'F-rms': 'RMS_Forward',
+    'F-CEP95': 'CEP95_Forward',
+    'F-CEP99': 'CEP99_Forward',
+    'F-max': 'Max_Forward',
+    # Vertical
+    'V-rms': 'RMS_Vertical',
+    'V-CEP95': 'CEP95_Vertical',
+    'V-CEP99': 'CEP99_Vertical',
+    'V-max': 'Max_Vertical',
+}
 
-    METRICS_FULL = ['H-rms', 'H-CEP95', 'H-CEP99', 'H-max',
-                    'L-rms', 'L-CEP95', 'L-CEP99', 'L-max',
-                    'F-rms', 'F-CEP95', 'F-CEP99', 'F-max',
-                    'V-rms', 'V-CEP95', 'V-CEP99', 'V-max']
+DIMENSION_CONFIGS = {
+    'H': {
+        'metrics': ['H-rms', 'H-CEP95', 'H-CEP99', 'H-max'],
+        'label_cn': '水平',
+        'label_en': 'Horizontal',
+        'colors': ['#2196F3', '#4CAF50', '#FF9800'],
+    },
+    'L': {
+        'metrics': ['L-rms', 'L-CEP95', 'L-CEP99', 'L-max'],
+        'label_cn': '横向',
+        'label_en': 'Lateral',
+        'colors': ['#2196F3', '#4CAF50', '#FF9800'],
+    },
+    'F': {
+        'metrics': ['F-rms', 'F-CEP95', 'F-CEP99', 'F-max'],
+        'label_cn': '前进方向',
+        'label_en': 'Forward',
+        'colors': ['#2196F3', '#4CAF50', '#FF9800'],
+    },
+    'V': {
+        'metrics': ['V-rms', 'V-CEP95', 'V-CEP99', 'V-max'],
+        'label_cn': '高程',
+        'label_en': 'Vertical',
+        'colors': ['#2196F3', '#4CAF50', '#FF9800'],
+    },
+}
 
-    def __init__(self, odom: float = 0.0, has_vertical: bool = True):
-        self.odom = odom
-        self.has_vertical = has_vertical
-        self.METRICS = self.METRICS_FULL if has_vertical else self.METRICS_FULL[:12]
-        self.metrics = {metric: 0.0 for metric in self.METRICS}
 
-
-class PrecisionStatistics:
-    """存储精度统计数据"""
-
-    def __init__(self, version: str = ""):
-        self.version = version
-        self.scenes = {}  # scene_type -> StatisticsData
-
-
-def parse_precision_file(filepath: str) -> Dict[str, PrecisionStatistics]:
-    """解析单个精度统计文件"""
-    result = {}
-
-    with open(filepath, 'r', encoding='utf-8') as f:
-        content = f.read()
-
-    lc_version_match = re.search(r'LC版本:\s*(\S+)', content)
-    tc_version_match = re.search(r'TC版本:\s*(\S+)', content)
-
-    lc_version = lc_version_match.group(1) if lc_version_match else "unknown"
-    tc_version = tc_version_match.group(1) if tc_version_match else "unknown"
-
-    stats_types = [
-        ('lc', rf'{re.escape(lc_version)} Statistics', lc_version),
-        ('tc', rf'{re.escape(tc_version)} Statistics', tc_version),
-        ('gnss', 'GNSS Statistics', 'GNSS')
+# ---- 数据结构 ----
+class MetricsData:
+    METRICS_FULL = [
+        'H-rms', 'H-CEP95', 'H-CEP99', 'H-max',
+        'L-rms', 'L-CEP95', 'L-CEP99', 'L-max',
+        'F-rms', 'F-CEP95', 'F-CEP99', 'F-max',
+        'V-rms', 'V-CEP95', 'V-CEP99', 'V-max',
     ]
 
-    for stat_key, pattern, version in stats_types:
-        start_match = re.search(rf'{pattern}', content)
-        if not start_match:
+    def __init__(self):
+        self.metrics: Dict[str, float] = {m: 0.0 for m in self.METRICS_FULL}
+
+
+class SchemeData:
+    """单个方案的统计数据：{scene_name: MetricsData}"""
+    def __init__(self, name: str, version: str):
+        self.name = name    # scheme key: 'lc', 'tc', 'gnss'
+        self.version = version  # e.g. 'pvtlc_c80c32da'
+        self.scenes: Dict[str, MetricsData] = {}
+
+    def add_scene(self, scene_name: str, data: MetricsData):
+        self.scenes[scene_name] = data
+
+
+# ---- 解析逻辑 ----
+def parse_precision_file(filepath: str) -> Tuple[str, List[SchemeData]]:
+    """
+    解析单个精度统计文件。
+    返回: (dataset_name, [SchemeData, ...])
+    """
+    with open(filepath, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+
+    lc_version = None
+    tc_version = None
+    for line in lines:
+        m = re.search(r'LC版本:\s*(\S+)', line)
+        if m:
+            lc_version = m.group(1)
+        m = re.search(r'TC版本:\s*(\S+)', line)
+        if m:
+            tc_version = m.group(1)
+
+    dataset_name = Path(filepath).parent.parent.name
+    result: List[SchemeData] = []
+
+    # ---- 找所有方案块的起止行号 ----
+    section_headers = []
+    for i, line in enumerate(lines):
+        # 方案块的标题行格式: "pvtlc_c80c32da Statistics ..."
+        # 必须是一行的开始（排除行中间的版本名引用）
+        stripped = line.rstrip()
+        if not stripped:
             continue
-
-        start_pos = start_match.end()
-        end_patterns = [rf'{re.escape(lc_version)} Statistics',
-                       rf'{re.escape(tc_version)} Statistics',
-                       'GNSS Statistics', '说明', 'Notes', '============']
-
-        end_pos = len(content)
-        for end_pattern in end_patterns:
-            end_match = re.search(end_pattern, content[start_pos:])
-            if end_match:
-                end_pos = start_pos + end_match.start()
+        # 检查是否匹配方案版本 + " Statistics"
+        for ver in [lc_version, tc_version, 'GNSS']:
+            if ver and re.match(rf'^{re.escape(ver)}\s+Statistics', stripped):
+                section_headers.append((i, ver))
                 break
 
-        stat_block = content[start_pos:end_pos]
-        lines = stat_block.split('\n')
-        stats = PrecisionStatistics(version)
+    # 按行号排序
+    section_headers.sort(key=lambda x: x[0])
 
-        has_vertical = 'V-rms' in stat_block
-        skip_line = True
+    # ---- 提取每个方案块 ----
+    for idx, (start_line, version) in enumerate(section_headers):
+        end_line = len(lines)
+        if idx + 1 < len(section_headers):
+            end_line = section_headers[idx + 1][0]
 
-        for line in lines:
-            line = line.strip()
-            if not line:
+        # 跳过标题行，从分隔线之后开始，到下一个section之前结束
+        block_lines = lines[start_line + 1:end_line]
+        skip = True
+        sd = SchemeData(version, version)
+
+        for line in block_lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if set(stripped) == {'-'}:
+                skip = False
+                continue
+            if skip:
                 continue
 
-            if set(line.strip()) == {'-'} or line.startswith('Scene Type') or line.startswith('场景类型'):
-                skip_line = False
+            nums = re.findall(r'[\d.]+', stripped)
+            has_vertical = any('V-rms' in stripped for _ in [1]) or 'V-rms' in ''.join(block_lines)
+            expected = 17 if has_vertical else 13
+            if len(nums) < expected:
                 continue
 
-            if skip_line:
+            m = re.match(r'^(.+?)\s*[\d.]+\s+', stripped)
+            if not m:
                 continue
+            scene = m.group(1).strip()
 
-            numbers = re.findall(r'[\d.]+', line)
-            expected_count = 17 if has_vertical else 13
-            if len(numbers) == expected_count:
-                values = [float(n) for n in numbers]
-                odom = values[0]
-                metrics_values = values[1:]
+            METRICS_FULL = [
+                'H-rms', 'H-CEP95', 'H-CEP99', 'H-max',
+                'L-rms', 'L-CEP95', 'L-CEP99', 'L-max',
+                'F-rms', 'F-CEP95', 'F-CEP99', 'F-max',
+                'V-rms', 'V-CEP95', 'V-CEP99', 'V-max',
+            ]
+            valid_metrics = METRICS_FULL[:16] if has_vertical else METRICS_FULL[:12]
+            values = [float(n) for n in nums]
+            data = MetricsData()
+            for i_m, metric in enumerate(valid_metrics):
+                if i_m + 1 < len(values):
+                    data.metrics[metric] = values[i_m + 1]
 
-                match = re.match(r'^(.+?)\s*[\d.]+\s+', line)
-                scene_type = match.group(1).strip() if match else 'Unknown'
+            sd.add_scene(scene, data)
 
-                data = StatisticsData(odom, has_vertical=has_vertical)
-                data.metrics = dict(zip(data.METRICS, metrics_values))
-                stats.scenes[scene_type] = data
+        if sd.scenes:
+            # scheme key
+            if version == lc_version:
+                sd.name = 'lc'
+            elif version == tc_version:
+                sd.name = 'tc'
+            else:
+                sd.name = 'gnss'
+            result.append(sd)
 
-        if stats.scenes:
-            result[stat_key] = stats
-
-    return result
+    return dataset_name, result
 
 
-def discover_datasets_recursive(input_dir: Path) -> Dict[str, Path]:
-    """递归发现所有数据集及其精度文件路径"""
-    datasets = {}
+def _parse_scheme_block(scheme_key: str, version: str, block: str) -> Optional[SchemeData]:
+    """解析一个方案的统计块"""
+    sd = SchemeData(scheme_key, version)
+    lines = block.split('\n')
+
+    has_vertical = 'V-rms' in block
+    valid_metrics = MetricsData.METRICS_FULL[:16] if has_vertical else MetricsData.METRICS_FULL[:12]
+
+    skip = True
+    for line in lines:
+        ls = line.strip()
+        if not ls:
+            continue
+        # 跳过分隔线
+        if set(ls) == {'-'}:
+            skip = False
+            continue
+        if skip:
+            continue
+
+        nums = re.findall(r'[\d.]+', ls)
+        expected = 17 if has_vertical else 13
+        if len(nums) < expected:
+            continue
+
+        # 提取场景名
+        m = re.match(r'^(.+?)\s*[\d.]+\s+', ls)
+        if not m:
+            continue
+        scene = m.group(1).strip()
+
+        data = MetricsData()
+        values = [float(n) for n in nums]
+        for i, metric in enumerate(valid_metrics):
+            if i + 1 < len(values):
+                data.metrics[metric] = values[i + 1]
+
+        sd.add_scene(scene, data)
+
+    return sd
+
+
+# ---- 查找精度文件 ----
+def find_precision_file(input_dir: Path) -> Optional[Path]:
+    """在目录树下查找 position_precision.txt"""
     if not input_dir.exists():
-        return datasets
-
-    for root, dirs, files in os.walk(input_dir):
-        for filename in files:
-            if filename == 'position_precision.txt':
-                full_path = Path(root) / filename
-                rel_path = full_path.parent.parent
-                try:
-                    relative_name = rel_path.relative_to(input_dir)
-                    datasets[str(relative_name)] = full_path
-                except ValueError:
-                    datasets[rel_path.name] = full_path
-
-    return datasets
-
-
-def get_scheme_stats(precision_file: Path, scheme: str) -> Optional[PrecisionStatistics]:
-    """从精度文件中提取特定方案的统计数据"""
-    try:
-        all_stats = parse_precision_file(str(precision_file))
-        stat_key = 'lc' if 'pvtlc' in scheme or 'pvttc' in scheme else 'tc'
-        if stat_key in all_stats:
-            return all_stats[stat_key]
         return None
-    except Exception as e:
-        print(f"  [警告] 解析文件失败 {precision_file}: {e}")
-        return None
+    # 优先查找 results/ 子目录下
+    results_dir = input_dir / 'results'
+    pfile = results_dir / 'position_precision.txt'
+    if pfile.exists():
+        return pfile
+    # 递归查找
+    for root, _, files in os.walk(input_dir):
+        if 'position_precision.txt' in files:
+            return Path(root) / 'position_precision.txt'
+    return None
 
 
-def create_bar_chart(stats: PrecisionStatistics, metrics: List[str], scenes: List[str],
-                     output_path: Path, title: str, scheme: str):
-    """创建柱状图：各场景指标对比"""
-    if not stats or not stats.scenes:
-        print(f"  [警告] 无数据，跳过柱状图生成")
-        return
-
-    available_scenes = [s for s in scenes if s in stats.scenes]
-    if not available_scenes:
-        print(f"  [警告] 无可用场景，跳过柱状图生成")
-        return
-
-    first_scene_data = stats.scenes[available_scenes[0]]
-    available_metrics = [m for m in metrics if m in first_scene_data.metrics]
-    if not available_metrics:
-        print(f"  [警告] 无可用指标，跳过柱状图生成")
-        return
-
-    n_metrics = len(available_metrics)
-    fig, axes = plt.subplots(1, n_metrics, figsize=(n_metrics * 3, 6))
-    if n_metrics == 1:
-        axes = [axes]
-
-    # 转换标签
-    scene_labels = [get_label(s) for s in available_scenes]
-    xlabel_text = get_label('场景')
-    ylabel_text = get_label('误差') + ' (m)'
-
-    for i, metric in enumerate(available_metrics):
-        values = [stats.scenes[s].metrics.get(metric, 0) for s in available_scenes]
-        ax = axes[i]
-        bars = ax.bar(range(len(available_scenes)), values, color='steelblue', alpha=0.8)
-        ax.set_title(metric, fontsize=12)
-        ax.set_xlabel(xlabel_text, fontsize=10)
-        ax.set_ylabel(ylabel_text, fontsize=10)
-        ax.set_xticks(range(len(available_scenes)))
-        ax.set_xticklabels(scene_labels, rotation=45, ha='right', fontsize=9)
-
-        for bar, val in zip(bars, values):
-            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
-                    f'{val:.2f}', ha='center', va='bottom', fontsize=8)
-
-    title_text = f'{get_label(title)} - {scheme} {get_label("各场景指标对比")}'
-    plt.suptitle(title_text, fontsize=14)
-    plt.tight_layout()
-    plt.savefig(output_path / f'bar_chart_{scheme}.png', dpi=150, bbox_inches='tight')
-    plt.close()
-    print(f"  [生成] 柱状图: {output_path / f'bar_chart_{scheme}.png'}")
+def _nice_step(y_max: float) -> float:
+    if y_max <= 0:
+        return 1.0
+    raw = y_max / 6
+    mag = 10 ** np.floor(np.log10(raw) if raw > 0 else 0)
+    norm = raw / mag if mag > 0 else raw
+    if norm <= 1:
+        step = 1
+    elif norm <= 2:
+        step = 2
+    elif norm <= 5:
+        step = 5
+    else:
+        step = 10
+    return step * mag
 
 
-def create_radar_chart(stats: PrecisionStatistics, metrics: List[str], scenes: List[str],
-                       output_path: Path, title: str, scheme: str):
-    """创建雷达图：多维度指标展示"""
-    if not stats or not stats.scenes:
-        print(f"  [警告] 无数据，跳过雷达图生成")
-        return
-
-    available_scenes = [s for s in scenes if s in stats.scenes]
-    if not available_scenes:
-        print(f"  [警告] 无可用场景，跳过雷达图生成")
-        return
-
-    first_scene_data = stats.scenes[available_scenes[0]]
-    available_metrics = [m for m in metrics if m in first_scene_data.metrics]
-    if len(available_metrics) < 3:
-        print(f"  [警告] 指标数量不足，跳过雷达图生成")
-        return
-
-    angles = np.linspace(0, 2*np.pi, len(available_metrics), endpoint=False).tolist()
-    angles += angles[:1]
-
-    fig, ax = plt.subplots(figsize=(10, 10), subplot_kw=dict(polar=True))
-    colors = plt.cm.Set2.colors[:min(len(available_scenes), 8)]
-
-    for i, scene in enumerate(available_scenes[:5]):
-        values = [stats.scenes[scene].metrics.get(m, 0) for m in available_metrics]
-        values += values[:1]
-
-        scene_label = get_label(scene)
-        ax.plot(angles, values, 'o-', linewidth=2, label=scene_label, color=colors[i % len(colors)])
-        ax.fill(angles, values, alpha=0.25, color=colors[i % len(colors)])
-
-    ax.set_xticks(angles[:-1])
-    ax.set_xticklabels(available_metrics, fontsize=10)
-    title_text = f'{get_label(title)} - {scheme} {get_label("多维度指标雷达图")}'
-    ax.set_title(title_text, fontsize=14, pad=20)
-    ax.legend(loc='upper right', bbox_to_anchor=(1.3, 1.0))
-
-    plt.savefig(output_path / f'radar_chart_{scheme}.png', dpi=150, bbox_inches='tight')
-    plt.close()
-    print(f"  [生成] 雷达图: {output_path / f'radar_chart_{scheme}.png'}")
+def _make_safe_filename(name: str) -> str:
+    """将标题转为安全的文件名"""
+    return name.replace(' ', '_').replace('-', '_').replace('__', '_')
 
 
-def create_heatmap(stats: PrecisionStatistics, metrics: List[str], scenes: List[str],
-                   output_path: Path, title: str, scheme: str):
-    """创建热力图：场景-指标矩阵"""
-    if not stats or not stats.scenes:
-        print(f"  [警告] 无数据，跳过热力图生成")
-        return
+def plot_single_metric(
+    metric_key: str,
+    schemes: List[SchemeData],
+    scenes_ordered: List[str],
+    output_dir: Path,
+    version_label: str,
+) -> None:
+    """
+    为单个指标生成一张条形图。
+    X轴: 各场景
+    每组 N 根柱子 (N=方案数)
+    """
+    scheme_labels: Dict[str, str] = {
+        'lc': 'pvtlc',
+        'tc': 'rtklc',
+        'gnss': 'GNSS',
+    }
+    scheme_names = [scheme_labels.get(s.name, s.name) for s in schemes]
+    n_schemes = len(schemes)
 
-    available_scenes = [s for s in scenes if s in stats.scenes]
-    if not available_scenes:
-        print(f"  [警告] 无可用场景，跳过热力图生成")
-        return
+    dim_key = metric_key.split('-')[0]
+    dim_cfg = DIMENSION_CONFIGS[dim_key]
+    colors = dim_cfg['colors']
+    display_name = METRIC_DISPLAY_NAMES.get(metric_key, metric_key)
 
-    first_scene_data = stats.scenes[available_scenes[0]]
-    available_metrics = [m for m in metrics if m in first_scene_data.metrics]
-    if not available_metrics:
-        print(f"  [警告] 无可用指标，跳过热力图生成")
-        return
+    # 文件名用英文全称
+    fname = f"{_make_safe_filename(display_name)}.png"
 
-    data_matrix = np.zeros((len(available_scenes), len(available_metrics)))
-    for i, scene in enumerate(available_scenes):
-        for j, metric in enumerate(available_metrics):
-            data_matrix[i, j] = stats.scenes[scene].metrics.get(metric, 0)
+    n_scenes = len(scenes_ordered)
+    bar_width = 0.20
+    group_gap = 0.30
+    total_bar_w = bar_width * n_schemes
+    scene_gap = group_gap
 
-    fig, ax = plt.subplots(figsize=(max(14, len(available_metrics) * 0.9),
-                                    max(10, len(available_scenes) * 1.2)))
+    # 计算每个场景的X中心
+    x_centers = []
+    cx = total_bar_w / 2
+    for _ in scenes_ordered:
+        x_centers.append(cx)
+        cx += total_bar_w + scene_gap
 
-    im = ax.imshow(data_matrix, cmap='YlOrRd', aspect='auto')
+    fig, ax = plt.subplots(figsize=(max(10, n_scenes * 1.6), 6))
+    fig.patch.set_facecolor('white')
+    ax.set_facecolor('#F8F9FA')
 
-    # 转换标签
-    scene_labels = [get_label(s) for s in available_scenes]
+    all_vals = []
+    for si, scheme in enumerate(schemes):
+        xs = [x_centers[di] - total_bar_w / 2 + si * bar_width
+              for di in range(n_scenes)]
+        vals = []
+        for scene in scenes_ordered:
+            v = scheme.scenes.get(scene, MetricsData()).metrics.get(metric_key, 0.0)
+            vals.append(v)
+            all_vals.append(v)
 
-    ax.set_xticks(np.arange(len(available_metrics)))
-    ax.set_yticks(np.arange(len(available_scenes)))
-    ax.set_xticklabels(available_metrics, fontsize=10, rotation=45, ha='right')
-    ax.set_yticklabels(scene_labels, fontsize=10)
+        color = colors[si % len(colors)]
+        bars = ax.bar(xs, vals, bar_width * 0.88,
+                     color=color, edgecolor='white',
+                     linewidth=0.6, zorder=3,
+                     label=scheme_names[si])
 
-    for i in range(len(available_scenes)):
-        for j in range(len(available_metrics)):
-            val = data_matrix[i, j]
-            color = 'white' if val > np.percentile(data_matrix, 70) else 'black'
-            ax.text(j, i, f'{val:.2f}', ha='center', va='center', color=color, fontsize=9)
+        for bar, val in zip(bars, vals):
+            if val > 0:
+                y_offset = val * 0.015
+                ax.text(bar.get_x() + bar.get_width() / 2,
+                       val + y_offset,
+                       f'{val:.2f}',
+                       ha='center', va='bottom',
+                       fontsize=9, color='#333333', zorder=4)
 
-    title_text = f'{get_label(title)} - {scheme} {get_label("场景-指标热力图")}'
-    ax.set_title(title_text, fontsize=14)
-    ax.set_xlabel(get_label('指标'), fontsize=12)
-    ax.set_ylabel(get_label('场景'), fontsize=12)
+    # X轴
+    ax.set_xticks(x_centers)
+    scene_labels = [get_label(s) for s in scenes_ordered]
+    ax.set_xticklabels(scene_labels, rotation=25, ha='right', fontsize=10)
 
-    cbar = plt.colorbar(im, ax=ax)
-    cbar.set_label(get_label('误差') + ' (m)', fontsize=10)
+    # Y轴
+    valid = [v for v in all_vals if v > 0]
+    if valid:
+        y_max = max(valid)
+        ax.set_ylim(0, y_max * 1.30)
+        y_step = _nice_step(y_max * 1.30)
+        ax.set_yticks(np.arange(0, y_max * 1.30 + y_step, y_step))
+    ax.set_ylabel('Error (m)', fontsize=10)
+    ax.tick_params(axis='y', labelsize=9)
+    ax.grid(axis='y', linestyle='--', linewidth=0.7, alpha=0.5, zorder=0)
+    ax.set_axisbelow(True)
 
-    plt.tight_layout()
-    plt.savefig(output_path / f'heatmap_{scheme}.png', dpi=150, bbox_inches='tight')
-    plt.close()
-    print(f"  [生成] 热力图: {output_path / f'heatmap_{scheme}.png'}")
+    # 美化边框
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['left'].set_color('#CCCCCC')
+    ax.spines['bottom'].set_color('#CCCCCC')
+
+    # 标题和图例
+    ax.set_title(display_name, fontsize=14, fontweight='bold',
+                color='#2C3E50', pad=10)
+    ax.legend(loc='upper right', fontsize=10,
+             frameon=True, edgecolor='#CCCCCC')
+
+    fig.suptitle(
+        f'{display_name} | {version_label}',
+        fontsize=12, color='#555555', y=1.01,
+    )
+
+    fig.tight_layout()
+    out_path = output_dir / fname
+    fig.savefig(out_path, dpi=150, bbox_inches='tight',
+                facecolor='white', edgecolor='none')
+    plt.close(fig)
+    print(f"  [生成] {fname}")
 
 
-def create_table(stats: PrecisionStatistics, metrics: List[str], scenes: List[str],
-                 output_path: Path, title: str, scheme: str) -> str:
-    """创建表格：文本格式汇总"""
-    if not stats or not stats.scenes:
-        return ""
+def plot_all_metrics(
+    schemes: List[SchemeData],
+    scenes_ordered: List[str],
+    output_dir: Path,
+    version_label: str,
+) -> int:
+    """为每个指标分别生成一张独立的图"""
+    for metric in MetricsData.METRICS_FULL:
+        plot_single_metric(
+            metric, schemes, scenes_ordered,
+            output_dir, version_label,
+        )
+    return len(MetricsData.METRICS_FULL)
 
-    available_scenes = [s for s in scenes if s in stats.scenes]
-    if not available_scenes:
-        return ""
 
-    first_scene_data = stats.scenes[available_scenes[0]]
-    available_metrics = [m for m in metrics if m in first_scene_data.metrics]
-    if not available_metrics:
-        return ""
+def write_text_summary(
+    schemes: List[SchemeData],
+    scenes_ordered: List[str],
+    output_dir: Path,
+    version_label: str,
+) -> None:
+    """输出文本格式汇总表"""
+    scheme_labels: Dict[str, str] = {
+        'lc': 'pvtlc',
+        'tc': 'rtklc',
+        'gnss': 'GNSS',
+    }
 
     lines = []
-    col_width = max(12, len(title) + 10)
-    lines.append("=" * (col_width + len(available_metrics) * 10))
-    lines.append(f"{title} - {scheme} 精度指标汇总表")
-    lines.append("=" * (col_width + len(available_metrics) * 10))
+    lines.append("=" * 90)
+    lines.append(f"精度指标汇总  |  版本: {version_label}  |  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append("=" * 90)
     lines.append("")
 
-    header = f"{'场景':<12}" + "".join([f"{m:>10}" for m in available_metrics])
-    lines.append(header)
-    lines.append("-" * (col_width + len(available_metrics) * 10))
+    scheme_names = [scheme_labels.get(s.name, s.name) for s in schemes]
+    sc_col_w = 14
+    val_col_w = 10
 
-    for scene in available_scenes:
-        values = [stats.scenes[scene].metrics.get(m, 0) for m in available_metrics]
-        row = f"{scene:<12}" + "".join([f"{v:>10.2f}" for v in values])
-        lines.append(row)
+    for dim_key in ['H', 'L', 'F', 'V']:
+        dim_cfg = DIMENSION_CONFIGS[dim_key]
+        metrics = dim_cfg['metrics']
+        dim_title = f"{dim_cfg['label_cn']} ({dim_cfg['label_en']})"
 
-    lines.append("")
-    lines.append("=" * (col_width + len(available_metrics) * 10))
+        lines.append(f"\n{'─' * 90}")
+        lines.append(f"  {dim_title}")
+        lines.append(f"{'─' * 90}")
 
-    table_content = "\n".join(lines)
+        # 表头
+        header = f"{'场景':^{sc_col_w}}" + "".join([f"{sn:^{val_col_w}}" for sn in scheme_names])
+        lines.append(header)
+        lines.append("─" * len(header))
 
-    with open(output_path / f'table_{scheme}.txt', 'w', encoding='utf-8') as f:
-        f.write(table_content)
-    print(f"  [生成] 表格: {output_path / f'table_{scheme}.txt'}")
+        for metric in metrics:
+            lines.append(f"\n{'  ' + metric}")
+            for scene in scenes_ordered:
+                row = f"{scene:<{sc_col_w}}"
+                for scheme in schemes:
+                    if scene in scheme.scenes:
+                        v = scheme.scenes[scene].metrics.get(metric, 0.0)
+                        val_str = f"{v:>{val_col_w}.3f}" if v > 0 else f"{'--':>{val_col_w}}"
+                    else:
+                        val_str = f"{'--':>{val_col_w}}"
+                    row += val_str
+                lines.append(row)
 
-    return table_content
+    lines.append("\n" + "=" * 90)
+
+    txt = "\n".join(lines)
+    out_path = output_dir / 'summary_table.txt'
+    with open(out_path, 'w', encoding='utf-8') as f:
+        f.write(txt)
+    print(f"  [生成] {out_path.name}")
 
 
 def create_output_directory(output_base_dir: Path, version_label: str) -> Path:
-    """创建输出目录"""
     visualize_dir = output_base_dir / "visualize_precision"
     visualize_dir.mkdir(parents=True, exist_ok=True)
-
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    subdir_name = f"{timestamp}_{version_label}"
-    output_dir = visualize_dir / subdir_name
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    return output_dir
+    subdir = visualize_dir / f"{timestamp}_{version_label}"
+    subdir.mkdir(parents=True, exist_ok=True)
+    return subdir
 
 
+# ---- 主函数 ----
 def main():
-    """主函数"""
     global HAS_CHINESE_FONT
-
-    # 设置中文字体
     HAS_CHINESE_FONT = setup_chinese_font()
 
-    parser = argparse.ArgumentParser(
-        description="精度指标可视化工具",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-示例:
-  python visualize_precision.py ../conf/visualize_precision_config.toml
-
-可视化类型:
-  - bar: 柱状图（各场景指标对比）
-  - radar: 雷达图（多维度指标展示）
-  - heatmap: 热力图（场景-指标矩阵）
-  - table: 表格（文本格式汇总）
-        """
-    )
-
+    parser = argparse.ArgumentParser(description="精度指标可视化工具")
     parser.add_argument("config_file", type=str, help="配置文件路径")
     args = parser.parse_args()
 
@@ -489,7 +553,7 @@ def main():
 
     input_dir_str = config.get('input_dir', '').strip()
     if not input_dir_str:
-        print(f"[错误] 配置文件中缺少 input_dir")
+        print("[错误] 配置文件中缺少 input_dir")
         sys.exit(1)
 
     input_dir = Path(input_dir_str)
@@ -497,11 +561,10 @@ def main():
         print(f"[错误] 输入目录不存在: {input_dir}")
         sys.exit(1)
 
-    version_label = config.get('version_label', 'Unknown')
-    visualize_schemes = config.get('visualize_schemes', ['pvtlc', 'rtklc'])
-    visualize_metrics = config.get('visualize_metrics', [])
-    visualize_scenes = config.get('visualize_scenes', [])
-    visualize_types = config.get('visualize_types', ['bar', 'radar', 'heatmap', 'table'])
+    version_label = config.get('version_label', input_dir.name)
+    visualize_types = config.get('visualize_types', ['bar', 'table'])
+    visualize_schemes_cfg = config.get('visualize_schemes', [])  # 可选：['lc', 'tc', 'gnss']
+    visualize_scenes_cfg = config.get('visualize_scenes', [])
 
     output_base_dir_str = config.get('output_base_dir', '').strip()
     output_base_dir = Path(output_base_dir_str) if output_base_dir_str else input_dir.parent
@@ -509,63 +572,66 @@ def main():
     output_dir = create_output_directory(output_base_dir, version_label)
     print(f"[信息] 输出目录: {output_dir}")
 
-    datasets = discover_datasets_recursive(input_dir)
-    print(f"[信息] 发现 {len(datasets)} 个数据集")
+    # ---- 查找精度文件 ----
+    pfile = find_precision_file(input_dir)
+    if not pfile:
+        print(f"[错误] 未找到 position_precision.txt 文件于: {input_dir}")
+        sys.exit(1)
+    print(f"[信息] 使用精度文件: {pfile}")
 
-    if not datasets:
-        print("[错误] 未找到任何精度文件")
+    # ---- 解析 ----
+    dataset_name, schemes = parse_precision_file(str(pfile))
+    print(f"[信息] 数据集: {dataset_name}")
+    print(f"[信息] 方案数量: {len(schemes)}")
+    for s in schemes:
+        print(f"  - {s.name}: {s.version} ({len(s.scenes)} 个场景)")
+
+    if not schemes:
+        print("[错误] 未能解析任何方案数据")
         sys.exit(1)
 
-    if not visualize_schemes:
-        for precision_file in datasets.values():
-            try:
-                all_stats = parse_precision_file(str(precision_file))
-                if 'lc' in all_stats:
-                    version = all_stats['lc'].version
-                    if 'pvtlc' in version:
-                        visualize_schemes.append('pvtlc')
-                    elif 'pvttc' in version:
-                        visualize_schemes.append('pvttc')
-                if 'tc' in all_stats:
-                    version = all_stats['tc'].version
-                    if 'rtklc' in version:
-                        visualize_schemes.append('rtklc')
-                    elif 'rtktc' in version:
-                        visualize_schemes.append('rtktc')
-            except:
-                pass
-        visualize_schemes = list(set(visualize_schemes))
-        if not visualize_schemes:
-            visualize_schemes = ['pvtlc', 'rtklc']
+    # ---- 按配置过滤方案 ----
+    if visualize_schemes_cfg:
+        schemes = [s for s in schemes if s.name in visualize_schemes_cfg]
+    print(f"[信息] 可视化方案: {[s.name for s in schemes]}")
 
-    for scheme in visualize_schemes:
-        print(f"\n[处理] 方案: {scheme}")
+    # ---- 确定场景列表 ----
+    all_scenes = set()
+    for s in schemes:
+        all_scenes.update(s.scenes.keys())
 
-        first_precision_file = list(datasets.values())[0]
-        stats = get_scheme_stats(first_precision_file, scheme)
+    if visualize_scenes_cfg:
+        scenes = [sc for sc in visualize_scenes_cfg if sc in all_scenes]
+    else:
+        scenes = sorted(all_scenes)
 
-        if not stats:
-            print(f"  [警告] 未找到 {scheme} 方案数据")
-            continue
+    # 过滤全零场景
+    active_scenes = []
+    for sc in scenes:
+        has_data = any(
+            s.scenes[sc].metrics[metric] > 0
+            for s in schemes if sc in s.scenes
+            for metric in MetricsData.METRICS_FULL
+        )
+        if has_data:
+            active_scenes.append(sc)
+    scenes = active_scenes
 
-        scenes_to_use = visualize_scenes if visualize_scenes else sorted(list(stats.scenes.keys()))
-        metrics_to_use = visualize_metrics if visualize_metrics else list(list(stats.scenes.values())[0].metrics.keys())
+    print(f"[信息] 场景列表: {scenes}")
 
-        title = f"{get_label('版本')}: {version_label}"
+    # ---- 生成图表 ----
+    count = 0
 
-        if 'bar' in visualize_types:
-            create_bar_chart(stats, metrics_to_use, scenes_to_use, output_dir, title, scheme)
+    if 'bar' in visualize_types:
+        print("\n[生成] 条形图（每个指标独立一张图）...")
+        count += plot_all_metrics(schemes, scenes, output_dir, version_label)
 
-        if 'radar' in visualize_types:
-            create_radar_chart(stats, metrics_to_use, scenes_to_use, output_dir, title, scheme)
+    if 'table' in visualize_types:
+        print("\n[生成] 文本汇总表...")
+        write_text_summary(schemes, scenes, output_dir, version_label)
+        count += 1
 
-        if 'heatmap' in visualize_types:
-            create_heatmap(stats, metrics_to_use, scenes_to_use, output_dir, title, scheme)
-
-        if 'table' in visualize_types:
-            create_table(stats, metrics_to_use, scenes_to_use, output_dir, title, scheme)
-
-    print(f"\n[完成] 可视化结果已保存到: {output_dir}")
+    print(f"\n[完成] 共生成 {count} 个图表/文件，保存至: {output_dir}")
     return 0
 
 
