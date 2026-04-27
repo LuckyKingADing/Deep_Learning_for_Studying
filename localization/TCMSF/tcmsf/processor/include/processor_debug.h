@@ -33,6 +33,7 @@ public:
     fileio::ToCSV bias_esti_state;
     fileio::ToCSV inner_dr_state;
     fileio::ToCSV init_state;
+    fileio::ToCSV init_timing;
     fileio::ToCSV cx_vali_state;
     fileio::ToCSV spp_vali_state;
     fileio::ToCSV pos_inno_range_norm;
@@ -69,6 +70,8 @@ private:
 
             FS::path init_state_fp(output_dir / "init_debug_state.csv");
 
+            FS::path init_timing_fp(output_dir / "init_timing.csv");
+
             FS::path cx_vali_state_fp(output_dir / "cx_vali_state.csv");
 
             FS::path spp_vali_state_fp(output_dir / "spp_vali_state.csv");
@@ -95,6 +98,7 @@ private:
                 bias_esti_state.open(bias_esti_state_fp.string()) &&
                 inner_dr_state.open(inner_dr_state_fp.string()) &&
                 init_state.open(init_state_fp.string()) &&
+                init_timing.open(init_timing_fp.string()) &&
                 cx_vali_state.open(cx_vali_state_fp.string()) &&
                 spp_vali_state.open(spp_vali_state_fp.string()) &&
                 pos_inno_range_norm.open(pos_inno_range_norm_fp.string()) &&

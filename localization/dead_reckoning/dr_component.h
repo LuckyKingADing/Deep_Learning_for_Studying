@@ -78,6 +78,9 @@ class DRComponent final : public apollo::cyber::Component<> {
  private:
   void RegisterCallbackFunctions();
   void parse_config(const std::string& config_file_path);
+
+ private:
+  DRInitTiming init_timing_;
 };
 
 CYBER_REGISTER_COMPONENT(DRComponent)

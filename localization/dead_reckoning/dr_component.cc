@@ -2,8 +2,37 @@
 
 #include "cyber/event/trace.h"
 
+#include <chrono>
+#include <iomanip>
+
 namespace byd {
 namespace dr {
+
+// ============================================================================
+// Init Timing Infrastructure for DR
+// ============================================================================
+struct DRInitTiming {
+    std::chrono::steady_clock::time_point component_start;
+    std::chrono::steady_clock::time_point config_parsed;
+    std::chrono::steady_clock::time_point iif_created;
+    std::chrono::steady_clock::time_point callbacks_registered;
+    std::chrono::steady_clock::time_point readers_created;
+    std::chrono::steady_clock::time_point writers_created;
+    std::chrono::steady_clock::time_point init_complete;
+    bool iif_created_ok = false;
+
+    // Sensor data arrival
+    std::chrono::steady_clock::time_point first_imu_time;
+    std::chrono::steady_clock::time_point first_gps_time;
+    std::chrono::steady_clock::time_point first_veh_time;
+    bool first_imu_received = false;
+    bool first_gps_received = false;
+    bool first_veh_received = false;
+
+    // DR output
+    std::chrono::steady_clock::time_point first_dr_output_time;
+    bool first_dr_output_ok = false;
+};
 
 // 坐标脱敏需求，使用加偏后的坐标
 // #define GPS_TPC "/drivers/gnss/raw"
@@ -24,6 +53,7 @@ DRComponent::DRComponent()
       ins_dispose_(false),
       veh_dispose_(false),
       msf_dispose_(false) {
+  init_timing_.component_start = std::chrono::steady_clock::now();
   enable_dr_daemon = false;
   enable_msf_info = false;
   rt_priority_ = 0;
@@ -42,14 +72,18 @@ DRComponent::~DRComponent() {
 
 bool DRComponent::Init() {
   parse_config("modules/localization/conf/dr_init.yml");
+  init_timing_.config_parsed = std::chrono::steady_clock::now();
   {
     Eigen::Matrix<double, 9, 1> static_bound;
     static_bound << 1e-3, 1e-3, 1e-3, 4e-3, 4e-3, 6e-3, 4e-3, 4e-3, 4e-3;
     dr_->set_static_bound(static_bound);
   }
   iif_ptr_ = MSF::IIF::ImuIssueFallbackInterface::create();
+  init_timing_.iif_created = std::chrono::steady_clock::now();
+  init_timing_.iif_created_ok = (iif_ptr_ != nullptr);
   ACHECK(iif_ptr_ != nullptr);
   RegisterCallbackFunctions();
+  init_timing_.callbacks_registered = std::chrono::steady_clock::now();
   dr_step_timer.reset();
   ReaderConfig veh_cfg, gps_cfg, imu_cfg, ins_cfg, msf_cfg, dr_cfg;
   veh_cfg.channel_name = VEH_TPC;
@@ -75,14 +109,25 @@ bool DRComponent::Init() {
     ins_reader_ = node_->CreateReader<Ins>(ins_cfg, ins_reader_cb_);
     ACHECK(ins_reader_ != nullptr);
   }
+  init_timing_.readers_created = std::chrono::steady_clock::now();
   dr_result_writer_ = node_->CreateWriter<LocalizationEstimate>(DR_TPC);
   ACHECK(dr_result_writer_ != nullptr);
   module_status_writer_ = node_->CreateWriter<ModuleStatus>(ModSta_TPC);
   ACHECK(module_status_writer_ != nullptr);
+  init_timing_.writers_created = std::chrono::steady_clock::now();
   if (enable_dr_daemon) {  // using a daemon thread to trigger dr update
     dr_->start_dr_daemon(dr_result_cb_, 0.01, rt_priority_,
                          rt_priority_delay_s_);
   }
+  init_timing_.init_complete = std::chrono::steady_clock::now();
+  auto total_ms = std::chrono::duration<double, std::milli>(init_timing_.init_complete - init_timing_.component_start).count();
+  auto cfg_ms = std::chrono::duration<double, std::milli>(init_timing_.config_parsed - init_timing_.component_start).count();
+  auto cb_ms = std::chrono::duration<double, std::milli>(init_timing_.callbacks_registered - init_timing_.component_start).count();
+  auto rd_ms = std::chrono::duration<double, std::milli>(init_timing_.readers_created - init_timing_.component_start).count();
+  auto wr_ms = std::chrono::duration<double, std::milli>(init_timing_.writers_created - init_timing_.component_start).count();
+  AINFO << "[INIT-TIMING] DR Init complete in " << std::fixed << std::setprecision(2)
+        << total_ms << "ms | config:" << cfg_ms << "ms | cbs:" << cb_ms
+        << "ms | readers:" << rd_ms << "ms | writers:" << wr_ms << "ms";
   return true;
 }
 
@@ -93,6 +138,10 @@ void DRComponent::RegisterCallbackFunctions() {
     if (gps_dispose_.exchange(true)) {
       AINFO << "new message arrived while gps_reader_cb_ not finished yet!";
       return;
+    }
+    if (!init_timing_.first_gps_received) {
+      init_timing_.first_gps_time = std::chrono::steady_clock::now();
+      init_timing_.first_gps_received = true;
     }
     if (gps_msg_->has_header() &&
         gps_msg_->header().has_measurement_timestamp() &&
@@ -110,6 +159,10 @@ void DRComponent::RegisterCallbackFunctions() {
     if (imu_dispose_.exchange(true)) {
       AINFO << "new message arrived while imu_reader_cb_ not finished yet!";
       return;
+    }
+    if (!init_timing_.first_imu_received) {
+      init_timing_.first_imu_time = std::chrono::steady_clock::now();
+      init_timing_.first_imu_received = true;
     }
     auto imu_msg_mod_ = iif_ptr_->insert_imu(imu_msg_);
     if (imu_msg_mod_->has_header() &&
@@ -156,6 +209,10 @@ void DRComponent::RegisterCallbackFunctions() {
     if (veh_dispose_.exchange(true)) {
       AINFO << "new message arrived while veh_reader_cb_ not finished yet!";
       return;
+    }
+    if (!init_timing_.first_veh_received) {
+      init_timing_.first_veh_time = std::chrono::steady_clock::now();
+      init_timing_.first_veh_received = true;
     }
     iif_ptr_->insert_veh(veh_msg_);
     if (veh_msg_->has_header() &&
@@ -315,6 +372,23 @@ void DRComponent::RegisterCallbackFunctions() {
         AINFO_EVERY(100)<<"DR NaN detected!";
         return;
       }
+    }
+    auto now = std::chrono::steady_clock::now();
+    if (!init_timing_.first_dr_output_ok) {
+      init_timing_.first_dr_output_time = now;
+      init_timing_.first_dr_output_ok = true;
+      auto imu_ms = init_timing_.first_imu_received ?
+          std::chrono::duration<double, std::milli>(now - init_timing_.first_imu_time).count() : -1.0;
+      auto gps_ms = init_timing_.first_gps_received ?
+          std::chrono::duration<double, std::milli>(now - init_timing_.first_gps_time).count() : -1.0;
+      auto veh_ms = init_timing_.first_veh_received ?
+          std::chrono::duration<double, std::milli>(now - init_timing_.first_veh_time).count() : -1.0;
+      auto init_ms = std::chrono::duration<double, std::milli>(init_timing_.init_complete - init_timing_.component_start).count();
+      AINFO << "[INIT-TIMING] DR first output | init:" << std::fixed << std::setprecision(1)
+            << init_ms << "ms | imu->out:" << imu_ms << "ms"
+            << " | gps->out:" << gps_ms << "ms"
+            << " | veh->out:" << veh_ms << "ms"
+            << " | heading:" << dr_data.heading;
     }
     // PERFORMANCE_TRACE_START(DR, dr_step); // 这个LOG可能导致DR卡顿，删除。
     dr_result_msg_->Clear();

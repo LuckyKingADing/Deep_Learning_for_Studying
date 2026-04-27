@@ -3,6 +3,8 @@
 
 // #define __TCMSF__ENABLE_TIGHT_COUPLE
 
+#include "processor_debug.h"
+
 namespace byd {
 namespace tcmsf {
 
@@ -24,20 +26,29 @@ namespace tcmsf {
 using apollo::cyber::ReaderConfig;
 
 TCMSFComponent::TCMSFComponent() :
-    gps_dispose_(false), imu_dispose_(false), ins_dispose_(false), veh_dispose_(false), rover_dispose_(false), base_dispose_(false), tcmsf_dispose_(false), dr_dispose_(false), vision_dispose_(false), sdmm_dispose_(false) {}
+    gps_dispose_(false), imu_dispose_(false), ins_dispose_(false), veh_dispose_(false), rover_dispose_(false), base_dispose_(false), tcmsf_dispose_(false), dr_dispose_(false), vision_dispose_(false), sdmm_dispose_(false) {
+    init_timing_.component_start = std::chrono::steady_clock::now();
+}
 
 TCMSFComponent::~TCMSFComponent() { AINFO << "TCMSFComponent exit"; }
 
 bool TCMSFComponent::Init() {
 
     iif_ptr_ = MSF::IIF::ImuIssueFallbackInterface::create();
+    init_timing_.iif_created = std::chrono::steady_clock::now();
+    init_timing_.iif_created_ok = (iif_ptr_ != nullptr);
     ACHECK(iif_ptr_ != nullptr);
 
     tcmsf_result_msg_ = std::make_shared<Pose>();
     resolve_          = rtcm::Resolve::create();
+    init_timing_.resolve_created = std::chrono::steady_clock::now();
+    init_timing_.resolve_created_ok = (resolve_ != nullptr);
     tcmsf_            = TCMSF::create(ConfigFilePath());
+    init_timing_.tcmsf_created = std::chrono::steady_clock::now();
+    init_timing_.tcmsf_created_ok = (tcmsf_ != nullptr);
 
     RegisterCallbackFunctions();
+    init_timing_.callbacks_registered = std::chrono::steady_clock::now();
 
     // set receive topics
     ReaderConfig veh_cfg, gps_cfg, imu_cfg, ins_cfg, rover_cfg, base_cfg, dr_cfg, vision_cfg, sdmm_cfg;
@@ -82,6 +93,7 @@ bool TCMSFComponent::Init() {
     ACHECK(rover_reader_ != nullptr);
     ACHECK(base_reader_ != nullptr);
 #endif
+    init_timing_.readers_created = std::chrono::steady_clock::now();
     // set publish topics
     tcmsf_result_writer_ = node_->CreateWriter<Pose>(TCMSF_TPC);
     ACHECK(tcmsf_result_writer_ != nullptr);
@@ -90,7 +102,11 @@ bool TCMSFComponent::Init() {
     msf_result_writer_ = node_->CreateWriter<LocResult>(MSF_TPC);
     ACHECK(msf_result_writer_ != nullptr);
 
+    init_timing_.writers_created = std::chrono::steady_clock::now();
+
     tcmsf_->start_fusion_daemon(result_cb_);
+    init_timing_.fusion_started = std::chrono::steady_clock::now();
+    init_timing_.fusion_started_ok = true;
 
     return true;
 }
@@ -103,7 +119,18 @@ void TCMSFComponent::RegisterCallbackFunctions() {
             AINFO << "new message arrived while gps_reader_cb_ not finished yet!";
             return;
         }
-
+        if (!init_timing_.first_gps_received) {
+            init_timing_.first_gps_time = std::chrono::steady_clock::now();
+            init_timing_.first_gps_received = true;
+            if (gps_msg_->has_position_status() && gps_msg_->position_status() != 0) {
+                init_timing_.first_valid_gps_time = std::chrono::steady_clock::now();
+                init_timing_.first_valid_gps_ok = true;
+            }
+        }
+        if (!init_timing_.first_valid_rtk_ok && gps_msg_->has_position_status() && gps_msg_->position_status() == 6) {
+            init_timing_.first_valid_rtk_time = std::chrono::steady_clock::now();
+            init_timing_.first_valid_rtk_ok = true;
+        }
         tcmsf_->insert_msg(gps_msg_);
 
         gps_dispose_.exchange(false);
@@ -115,7 +142,17 @@ void TCMSFComponent::RegisterCallbackFunctions() {
             AINFO << "new message arrived while imu_reader_cb_ not finished yet!";
             return;
         }
+        if (!init_timing_.first_imu_received) {
+            init_timing_.first_imu_time = std::chrono::steady_clock::now();
+            init_timing_.first_imu_received = true;
+        }
         auto imu_msg_mod_ = iif_ptr_->insert_imu(imu_msg_);
+        if (imu_msg_mod_->has_header() && imu_msg_mod_->has_imu_status() && imu_msg_mod_->imu_status() == 1) {
+            if (!init_timing_.first_valid_imu_ok) {
+                init_timing_.first_valid_imu_time = std::chrono::steady_clock::now();
+                init_timing_.first_valid_imu_ok = true;
+            }
+        }
         tcmsf_->insert_msg(imu_msg_mod_);
 
         imu_dispose_.exchange(false);
@@ -126,6 +163,10 @@ void TCMSFComponent::RegisterCallbackFunctions() {
         if (veh_dispose_.exchange(true)) {
             AINFO << "new message arrived while veh_reader_cb_ not finished yet!";
             return;
+        }
+        if (!init_timing_.first_veh_received) {
+            init_timing_.first_veh_time = std::chrono::steady_clock::now();
+            init_timing_.first_veh_received = true;
         }
         iif_ptr_->insert_veh(veh_msg_);
         tcmsf_->insert_msg(veh_msg_);
@@ -212,6 +253,37 @@ void TCMSFComponent::RegisterCallbackFunctions() {
     result_cb_ = [this]() {
         PERFORMANCE_TRACE_START(TCMSF, msf);
         tcmsf_->output_msg(tcmsf_result_msg_);
+        auto now = std::chrono::steady_clock::now();
+        if (!init_timing_.first_msf_output_ok) {
+            init_timing_.first_msf_output_time = now;
+            init_timing_.first_msf_output_ok = true;
+            auto iif_ms = std::chrono::duration<double, std::milli>(now - init_timing_.component_start).count();
+            auto imu_ms = init_timing_.first_imu_received ?
+                std::chrono::duration<double, std::milli>(now - init_timing_.first_imu_time).count() : -1.0;
+            auto gps_ms = init_timing_.first_gps_received ?
+                std::chrono::duration<double, std::milli>(now - init_timing_.first_gps_time).count() : -1.0;
+            auto fuse_ms = init_timing_.fusion_started_ok ?
+                std::chrono::duration<double, std::milli>(now - init_timing_.fusion_started).count() : -1.0;
+            AINFO << "[INIT-TIMING] First MSF output at " << fmt::format("{:8.2f}", iif_ms) << "ms from start"
+                  << " | imu_to_out:" << fmt::format("{:8.2f}", imu_ms) << "ms"
+                  << " | gps_to_out:" << fmt::format("{:8.2f}", gps_ms) << "ms"
+                  << " | fuse_start_to_out:" << fmt::format("{:8.2f}", fuse_ms) << "ms"
+                  << " | fusion_status:" << (int)tcmsf_result_msg_->fusion_status()
+                  << " | align_status:" << (int)tcmsf_result_msg_->align_status();
+        }
+        if (!init_timing_.msf_ready &&
+            (tcmsf_result_msg_->fusion_status() == byd::modules::tcmsf::Pose::FusionStatus::Pose_FusionStatus_FULLSTATE ||
+             tcmsf_result_msg_->fusion_status() == byd::modules::tcmsf::Pose::FusionStatus::Pose_FusionStatus_GPSONLY)) {
+            init_timing_.msf_ready = true;
+            init_timing_.msf_ready_duration_ms = std::chrono::duration<double, std::milli>(now - init_timing_.component_start).count();
+            AINFO << "[INIT-TIMING] MSF Ready! duration:" << init_timing_.msf_ready_duration_ms << "ms from start";
+        }
+        if (!init_timing_.msf_aligned_ok &&
+            tcmsf_result_msg_->align_status() == byd::modules::tcmsf::Pose_AlignType::TCMSF_Pose_AlignType_ALIGNED) {
+            init_timing_.msf_aligned_ok = true;
+            init_timing_.align_complete_duration_ms = std::chrono::duration<double, std::milli>(now - init_timing_.component_start).count();
+            AINFO << "[INIT-TIMING] MSF ALIGNED! duration:" << init_timing_.align_complete_duration_ms << "ms from start";
+        }
         tcmsf_result_msg_->mutable_header()->set_publish_timestamp(apollo::cyber::Time::Now().ToSecond());
         update_msf_from_tcmsf();
         auto tcmsf_output_msg_ = std::make_shared<byd::modules::tcmsf::Pose>(*tcmsf_result_msg_);

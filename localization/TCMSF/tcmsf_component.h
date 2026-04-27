@@ -24,8 +24,55 @@
 
 #include "imu_issue_fallback_interface.h"
 
+#include <atomic>
+#include <chrono>
+
 namespace byd {
 namespace tcmsf {
+
+// ============================================================================
+// Init Timing Infrastructure
+// ============================================================================
+struct InitTiming {
+    std::chrono::steady_clock::time_point component_start;
+    std::chrono::steady_clock::time_point iif_created;
+    std::chrono::steady_clock::time_point resolve_created;
+    std::chrono::steady_clock::time_point tcmsf_created;
+    std::chrono::steady_clock::time_point callbacks_registered;
+    std::chrono::steady_clock::time_point readers_created;
+    std::chrono::steady_clock::time_point writers_created;
+    std::chrono::steady_clock::time_point fusion_started;
+    std::chrono::steady_clock::time_point init_complete;
+    bool iif_created_ok = false;
+    bool resolve_created_ok = false;
+    bool tcmsf_created_ok = false;
+    bool fusion_started_ok = false;
+
+    // Sensor data arrival tracking
+    std::chrono::steady_clock::time_point first_imu_time;
+    std::chrono::steady_clock::time_point first_gps_time;
+    std::chrono::steady_clock::time_point first_veh_time;
+    std::chrono::steady_clock::time_point first_valid_imu_time;
+    std::chrono::steady_clock::time_point first_valid_gps_time;
+    std::chrono::steady_clock::time_point first_valid_rtk_time;
+    std::chrono::steady_clock::time_point first_msf_output_time;
+    bool first_imu_received = false;
+    bool first_gps_received = false;
+    bool first_veh_received = false;
+    bool first_valid_imu_ok = false;
+    bool first_valid_gps_ok = false;
+    bool first_valid_rtk_ok = false;
+    bool first_msf_output_ok = false;
+    bool msf_aligned_ok = false;
+    bool msf_ready = false;
+
+    // Final results
+    double init_duration_ms = 0.0;
+    double sensor_ready_duration_ms = 0.0;
+    double msf_ready_duration_ms = 0.0;
+    double first_output_duration_ms = 0.0;
+    double align_complete_duration_ms = 0.0;
+};
 
 using apollo::cyber::Reader;
 using apollo::cyber::Writer;
@@ -113,6 +160,9 @@ private:
 
 private:
     void update_msf_from_tcmsf();
+
+private:
+    InitTiming init_timing_;
 };
 
 CYBER_REGISTER_COMPONENT(TCMSFComponent)
