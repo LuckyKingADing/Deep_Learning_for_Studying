@@ -1,0 +1,12 @@
+# 测试配置：多数据集对比
+version_a_dir = "/tmp/test_version_a"
+version_b_dir = "/tmp/test_version_b"
+version_a_label = "version_A"
+version_b_label = "version_B"
+
+compare_schemes = []
+compare_metrics = []
+compare_scenes = []
+
+output_base_dir = "/tmp"
+verbose = true

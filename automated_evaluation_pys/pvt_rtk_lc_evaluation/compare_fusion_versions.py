@@ -540,13 +540,6 @@ def compare_position_precision(
             scene_header = []
             scene_header.append(f"--- {scene} 场景 ---")
             scene_header.append("")
-            max_dataset_len = max(len(ds) for ds in common_datasets) if common_datasets else 15
-            dataset_col_width = max(max_dataset_len, 15)
-            header_fmt = f"{{dataset:<{dataset_col_width}}} | {{metric:<10}} | {{version_a:>12}} | {{version_b:>12}}"
-            scene_header.append(header_fmt.format(dataset='数据集', metric='指标',
-                                                  version_a=version_a_label, version_b=version_b_label))
-            scene_header.append("-" * (dataset_col_width + 35))
-
             terminal_output.extend(scene_header)
             file_output.extend(scene_header)
 
@@ -568,6 +561,17 @@ def compare_position_precision(
                     missing_notes.append(f"{dataset}/{scheme}/{scene}: 缺少位置精度场景数据")
                     continue
 
+                # 数据集名称单独一行显示
+                dataset_header = []
+                dataset_header.append(f"数据集: {dataset}")
+                header_fmt = f"{{metric:<10}} | {{version_a:>12}} | {{version_b:>12}}"
+                dataset_header.append(header_fmt.format(metric='指标',
+                                                  version_a=version_a_label, version_b=version_b_label))
+                dataset_header.append("-" * 38)
+
+                terminal_output.extend(dataset_header)
+                file_output.extend(dataset_header)
+
                 for metric in metrics_to_compare:
                     value_a = scene_data_a.metrics.get(metric, 0.0)
                     value_b = scene_data_b.metrics.get(metric, 0.0)
@@ -581,22 +585,22 @@ def compare_position_precision(
                     formatted_a_file = format_bold(value_a, is_a_better, use_terminal=False)
                     formatted_b_file = format_bold(value_b, is_b_better, use_terminal=False)
 
-                    row_fmt_terminal = f"{{dataset:<{dataset_col_width}}} | {{metric:<10}} | {{value_a:>12}} | {{value_b:>12}}"
-                    row_fmt_file = f"{{dataset:<{dataset_col_width}}} | {{metric:<10}} | {{value_a:>16}} | {{value_b:>16}}"
+                    row_fmt_terminal = f"{{metric:<10}} | {{value_a:>12}} | {{value_b:>12}}"
+                    row_fmt_file = f"{{metric:<10}} | {{value_a:>16}} | {{value_b:>16}}"
 
                     terminal_output.append(row_fmt_terminal.format(
-                        dataset=dataset, metric=metric,
+                        metric=metric,
                         value_a=formatted_a_terminal, value_b=formatted_b_terminal))
                     file_output.append(row_fmt_file.format(
-                        dataset=dataset, metric=metric,
+                        metric=metric,
                         value_a=formatted_a_file, value_b=formatted_b_file))
 
-            terminal_output.append("")
-            file_output.append("")
-            terminal_output.append("-" * 120)
-            file_output.append("-" * 120)
-            terminal_output.append("")
-            file_output.append("")
+                terminal_output.append("")
+                file_output.append("")
+                terminal_output.append("-" * 120)
+                file_output.append("-" * 120)
+                terminal_output.append("")
+                file_output.append("")
 
     if missing_notes:
         missing_section = []
@@ -679,13 +683,6 @@ def compare_velocity_precision(
             scene_header = []
             scene_header.append(f"--- {scene} 场景 ---")
             scene_header.append("")
-            max_dataset_len = max(len(ds) for ds in common_datasets) if common_datasets else 15
-            dataset_col_width = max(max_dataset_len, 15)
-            header_fmt = f"{{dataset:<{dataset_col_width}}} | {{metric:<10}} | {{version_a:>12}} | {{version_b:>12}}"
-            scene_header.append(header_fmt.format(dataset='数据集', metric='指标',
-                                                  version_a=version_a_label, version_b=version_b_label))
-            scene_header.append("-" * (dataset_col_width + 35))
-
             terminal_output.extend(scene_header)
             file_output.extend(scene_header)
 
@@ -711,6 +708,17 @@ def compare_velocity_precision(
                     missing_notes.append(f"{dataset}/{scheme}/{scene}: 缺少速度精度场景数据")
                     continue
 
+                # 数据集名称单独一行显示
+                dataset_header = []
+                dataset_header.append(f"数据集: {dataset}")
+                header_fmt = f"{{metric:<10}} | {{version_a:>12}} | {{version_b:>12}}"
+                dataset_header.append(header_fmt.format(metric='指标',
+                                                  version_a=version_a_label, version_b=version_b_label))
+                dataset_header.append("-" * 38)
+
+                terminal_output.extend(dataset_header)
+                file_output.extend(dataset_header)
+
                 for metric in velocity_metrics:
                     value_a = scene_data_a.metrics.get(metric, 0.0)
                     value_b = scene_data_b.metrics.get(metric, 0.0)
@@ -724,22 +732,22 @@ def compare_velocity_precision(
                     formatted_a_file = format_bold(value_a, is_a_better, use_terminal=False)
                     formatted_b_file = format_bold(value_b, is_b_better, use_terminal=False)
 
-                    row_fmt_terminal = f"{{dataset:<{dataset_col_width}}} | {{metric:<10}} | {{value_a:>12}} | {{value_b:>12}}"
-                    row_fmt_file = f"{{dataset:<{dataset_col_width}}} | {{metric:<10}} | {{value_a:>16}} | {{value_b:>16}}"
+                    row_fmt_terminal = f"{{metric:<10}} | {{value_a:>12}} | {{value_b:>12}}"
+                    row_fmt_file = f"{{metric:<10}} | {{value_a:>16}} | {{value_b:>16}}"
 
                     terminal_output.append(row_fmt_terminal.format(
-                        dataset=dataset, metric=metric,
+                        metric=metric,
                         value_a=formatted_a_terminal, value_b=formatted_b_terminal))
                     file_output.append(row_fmt_file.format(
-                        dataset=dataset, metric=metric,
+                        metric=metric,
                         value_a=formatted_a_file, value_b=formatted_b_file))
 
-            terminal_output.append("")
-            file_output.append("")
-            terminal_output.append("-" * 120)
-            file_output.append("-" * 120)
-            terminal_output.append("")
-            file_output.append("")
+                terminal_output.append("")
+                file_output.append("")
+                terminal_output.append("-" * 120)
+                file_output.append("-" * 120)
+                terminal_output.append("")
+                file_output.append("")
 
     if missing_notes:
         missing_section = []

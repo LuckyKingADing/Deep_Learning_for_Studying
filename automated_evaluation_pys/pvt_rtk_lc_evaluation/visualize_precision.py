@@ -81,26 +81,35 @@ def get_label(text: str) -> str:
 
 # ---- 维度与配色配置 ----
 METRIC_DISPLAY_NAMES = {
-    # Horizontal
-    'H-rms': 'RMS_Horizontal',
-    'H-CEP95': 'CEP95_Horizontal',
-    'H-CEP99': 'CEP99_Horizontal',
-    'H-max': 'Max_Horizontal',
+    # Horizontal (位置精度)
+    'H-rms': 'Pos_RMS_Horizontal',
+    'H-CEP95': 'Pos_CEP95_Horizontal',
+    'H-CEP99': 'Pos_CEP99_Horizontal',
+    'H-max': 'Pos_Max_Horizontal',
     # Lateral
-    'L-rms': 'RMS_Lateral',
-    'L-CEP95': 'CEP95_Lateral',
-    'L-CEP99': 'CEP99_Lateral',
-    'L-max': 'Max_Lateral',
+    'L-rms': 'Pos_RMS_Lateral',
+    'L-CEP95': 'Pos_CEP95_Lateral',
+    'L-CEP99': 'Pos_CEP99_Lateral',
+    'L-max': 'Pos_Max_Lateral',
     # Forward
-    'F-rms': 'RMS_Forward',
-    'F-CEP95': 'CEP95_Forward',
-    'F-CEP99': 'CEP99_Forward',
-    'F-max': 'Max_Forward',
+    'F-rms': 'Pos_RMS_Forward',
+    'F-CEP95': 'Pos_CEP95_Forward',
+    'F-CEP99': 'Pos_CEP99_Forward',
+    'F-max': 'Pos_Max_Forward',
     # Vertical
-    'V-rms': 'RMS_Vertical',
-    'V-CEP95': 'CEP95_Vertical',
-    'V-CEP99': 'CEP99_Vertical',
-    'V-max': 'Max_Vertical',
+    'V-rms': 'Pos_RMS_Vertical',
+    'V-CEP95': 'Pos_CEP95_Vertical',
+    'V-CEP99': 'Pos_CEP99_Vertical',
+    'V-max': 'Pos_Max_Vertical',
+}
+
+# 速度精度指标命名
+VELOCITY_METRIC_DISPLAY_NAMES = {
+    'RMS': 'Vel_RMS',
+    'CEP50': 'Vel_CEP50',
+    'CEP95': 'Vel_CEP95',
+    'CEP99': 'Vel_CEP99',
+    'Max': 'Vel_Max',
 }
 
 # 场景的标准顺序（用于图表标签排序）
@@ -604,8 +613,8 @@ def plot_velocity_metrics(
     colors = ['#2196F3', '#4CAF50', '#FF9800']
 
     for metric in VelocityMetricsData.METRICS_VELOCITY:
-        display_name = METRIC_DISPLAY_NAMES.get(metric, metric)
-        fname = f'{display_name}_Velocity.png'
+        display_name = VELOCITY_METRIC_DISPLAY_NAMES.get(metric, metric)
+        fname = f'{display_name}.png'
 
         n_schemes = len(schemes)
         n_scenes = len(scenes_ordered)
@@ -741,7 +750,7 @@ def write_text_summary(
     lines.append("\n" + "=" * 90)
 
     txt = "\n".join(lines)
-    out_path = output_dir / 'summary_table.txt'
+    out_path = output_dir / 'position_summary_table.txt'
     with open(out_path, 'w', encoding='utf-8') as f:
         f.write(txt)
     print(f"  [生成] {out_path.name}")

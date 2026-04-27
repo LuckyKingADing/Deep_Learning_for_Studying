@@ -1,0 +1,12 @@
+# 测试配置：使用本地示例数据
+version_a_dir = "/home/dingxingyu/leetcode/Deep_Learning_for_Studying/workcode/automated_evaluation_pys/示例子数据集部分结果"
+version_b_dir = "/home/dingxingyu/leetcode/Deep_Learning_for_Studying/workcode/automated_evaluation_pys/示例子数据集部分结果/0424-上午"
+version_a_label = "c80c32da"
+version_b_label = "new_version"
+
+compare_schemes = ["pvtlc", "rtklc"]
+compare_metrics = []
+compare_scenes = []
+
+output_base_dir = "/home/dingxingyu/leetcode/Deep_Learning_for_Studying/automated_evaluation_pys/示例子数据集部分结果"
+verbose = true

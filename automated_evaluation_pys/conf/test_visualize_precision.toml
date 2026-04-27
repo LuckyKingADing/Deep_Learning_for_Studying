@@ -1,0 +1,15 @@
+# 测试配置：使用本地示例数据
+input_dir = "/home/dingxingyu/leetcode/Deep_Learning_for_Studying/workcode/automated_evaluation_pys/示例子数据集部分结果/0424-下午 正常"
+version_label = "test"
+
+# 可视化方案
+visualize_schemes = ["lc","tc",]
+
+# 可视化场景
+visualize_scenes = []
+
+# 可视化类型
+visualize_types = ["bar", "table"]
+
+# 输出到示例子数据集部分结果目录
+output_base_dir = "/home/dingxingyu/leetcode/Deep_Learning_for_Studying/automated_evaluation_pys/示例子数据集部分结果"
