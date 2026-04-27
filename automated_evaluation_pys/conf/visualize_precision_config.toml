@@ -1,13 +1,15 @@
 # 测试配置：单个数据集 0424-下午 正常
 # 可用方案: lc (pvtlc), tc (rtklc), gnss
-input_dir = "/Users/ading/Code_Projects/Deep_Learning_for_Studying/automated_evaluation_pys/示例子数据集部分结果/0424-下午 正常"
+# 云端路径: /mnt/data/oss-byd-wl-roadtest/users/localization/evaluation/ota630_c80c32da_0424
+input_dir = "/mnt/data/oss-byd-wl-roadtest/users/localization/evaluation/ota630_c80c32da_0424"
 version_label = "c80c32da_0424"
 
 # 要可视化的方案（留空则全部显示）
 # 可选: ["lc"], ["tc"], ["lc", "tc"], ["lc", "tc", "gnss"]
-visualize_schemes = ["lc","tc","gnss" ]
+visualize_schemes = ["lc", "tc"]
 
-# 要可视化的场景（留空则自动检测）
+# 要可视化的场景（留空则自动检测并按标准顺序排列）
+# 标准顺序: 全部, 正常, 开阔场景, 半遮挡, 双边遮挡, 隧道, 转发器
 visualize_scenes = []
 
 # 可视化类型
@@ -16,4 +18,4 @@ visualize_scenes = []
 visualize_types = ["bar", "table"]
 
 # 输出基础目录
-output_base_dir = "/Users/ading/Code_Projects/Deep_Learning_for_Studying/automated_evaluation_pys/示例子数据集部分结果"
+output_base_dir = "/mnt/data/oss-byd-wl-roadtest/users/localization/evaluation"

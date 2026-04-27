@@ -6,10 +6,11 @@
 功能说明：
 1. 对比两个版本共同存在的数据集（支持多层子目录结构）
 2. 对比相同方案（pvtlc vs pvtlc, rtklc vs rtklc）
-3. 对比精度指标，较大值（较差）标粗显示
+3. 对比位置精度和速度精度指标，较大值（较差）标粗显示
 4. 缺失的数据集/方案在报告中说明
 5. 自动生成带时间戳的输出目录
 6. 指标和场景从精度文件中自动检测，不自行扩展
+7. 输出三个报告文件：位置对比、速度对比、合并报告
 
 使用方法：
     python compare_fusion_versions.py <配置文件路径>
@@ -32,8 +33,12 @@ except ImportError:
     sys.exit(1)
 
 
+# 场景的标准顺序（用于图表标签排序）
+SCENE_ORDER = ['全部', '正常', '开阔场景', '半遮挡', '双边遮挡', '隧道', '转发器']
+
+
 class StatisticsData:
-    """单个场景的统计数据"""
+    """单个场景的位置精度统计数据"""
 
     METRICS_FULL = ['H-rms', 'H-CEP95', 'H-CEP99', 'H-max',
                     'L-rms', 'L-CEP95', 'L-CEP99', 'L-max',
@@ -51,12 +56,29 @@ class StatisticsData:
         self.metrics = {metric: 0.0 for metric in self.METRICS}
 
 
+class VelocityStatisticsData:
+    """单个场景的速度精度统计数据"""
+
+    METRICS_VELOCITY = ['RMS', 'CEP50', 'CEP95', 'CEP99', 'Max']
+
+    def __init__(self):
+        self.metrics = {metric: 0.0 for metric in self.METRICS_VELOCITY}
+
+
 class PrecisionStatistics:
-    """存储精度统计数据"""
+    """存储位置精度统计数据"""
 
     def __init__(self, version: str = ""):
         self.version = version
         self.scenes = {}  # scene_type -> StatisticsData
+
+
+class VelocityStatistics:
+    """存储速度精度统计数据"""
+
+    def __init__(self, version: str = ""):
+        self.version = version
+        self.scenes = {}  # scene_type -> VelocityStatisticsData
 
 
 def parse_precision_file(filepath: str) -> Dict[str, PrecisionStatistics]:
@@ -151,13 +173,102 @@ def parse_precision_file(filepath: str) -> Dict[str, PrecisionStatistics]:
     return result
 
 
-def discover_datasets_recursive(version_dir: Path) -> Dict[str, Path]:
+def parse_velocity_file(filepath: str) -> Dict[str, VelocityStatistics]:
+    """
+    解析速度精度统计文件
+
+    Args:
+        filepath: 速度精度文件路径
+
+    Returns:
+        包含 lc、tc、gnss 三种速度统计的字典
+    """
+    result = {}
+
+    with open(filepath, 'r', encoding='utf-8') as f:
+        content = f.read()
+
+    # 提取LC和TC版本号
+    lc_version_match = re.search(r'LC版本:\s*(\S+)', content)
+    tc_version_match = re.search(r'TC版本:\s*(\S+)', content)
+
+    lc_version = lc_version_match.group(1) if lc_version_match else "unknown"
+    tc_version = tc_version_match.group(1) if tc_version_match else "unknown"
+
+    # 定义三种统计类型（注意：速度文件中标题格式是 "xxx Velocity Statistics"）
+    stats_types = [
+        ('lc', rf'{re.escape(lc_version)} Velocity Statistics', lc_version),
+        ('tc', rf'{re.escape(tc_version)} Velocity Statistics', tc_version),
+        ('gnss', 'GNSS Velocity Statistics', 'GNSS')
+    ]
+
+    for stat_key, pattern, version in stats_types:
+        start_match = re.search(rf'{pattern}', content)
+        if not start_match:
+            continue
+
+        start_pos = start_match.end()
+
+        end_patterns = [rf'{re.escape(lc_version)} Velocity Statistics',
+                       rf'{re.escape(tc_version)} Velocity Statistics',
+                       'GNSS Velocity Statistics',
+                       '说明', 'Notes', '============']
+
+        end_pos = len(content)
+        for end_pattern in end_patterns:
+            end_match = re.search(end_pattern, content[start_pos:])
+            if end_match:
+                end_pos = start_pos + end_match.start()
+                break
+
+        stat_block = content[start_pos:end_pos]
+        lines = stat_block.split('\n')
+        stats = VelocityStatistics(version)
+
+        skip_line = True
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+
+            if set(line.strip()) == {'-'} or line.startswith('Scene Type') or line.startswith('场景类型'):
+                skip_line = False
+                continue
+
+            if skip_line:
+                continue
+
+            # 速度精度文件每行有6个数值：RMS, CEP50, CEP95, CEP99, Max
+            numbers = re.findall(r'[\d.]+', line)
+            if len(numbers) == 5:
+                values = [float(n) for n in numbers]
+
+                match = re.match(r'^(.+?)\s*[\d.]+\s+', line)
+                if match:
+                    scene_type = match.group(1).strip()
+                else:
+                    scene_type = 'Unknown'
+
+                data = VelocityStatisticsData()
+                data.metrics = dict(zip(VelocityStatisticsData.METRICS_VELOCITY, values))
+
+                stats.scenes[scene_type] = data
+
+        if stats.scenes:
+            result[stat_key] = stats
+
+    return result
+
+
+def discover_datasets_recursive(version_dir: Path, file_type: str = 'position') -> Dict[str, Path]:
     """
     递归发现版本目录下的所有数据集及其精度文件路径
     支持多层子目录结构
 
     Args:
         version_dir: 版本目录路径
+        file_type: 文件类型 ('position' 或 'velocity')
 
     Returns:
         数据集相对路径 -> 精度文件路径 的字典
@@ -167,16 +278,22 @@ def discover_datasets_recursive(version_dir: Path) -> Dict[str, Path]:
     if not version_dir.exists():
         return datasets
 
-    # 递归查找所有 position_precision.txt 文件
+    target_filename = 'position_precision.txt' if file_type == 'position' else 'velocity_precision.txt'
+
+    # 递归查找精度文件
     for root, dirs, files in os.walk(version_dir):
         for filename in files:
-            if filename == 'position_precision.txt':
+            if filename == target_filename:
                 full_path = Path(root) / filename
                 # 计算相对于版本目录的路径
-                rel_path = full_path.parent.parent  # 去掉 results/position_precision.txt
+                rel_path = full_path.parent.parent  # 去掉 results/xxx_precision.txt
                 try:
                     relative_name = rel_path.relative_to(version_dir)
-                    datasets[str(relative_name)] = full_path
+                    # 如果相对路径为 "."，使用目录名替代
+                    dataset_name = str(relative_name)
+                    if dataset_name == '.':
+                        dataset_name = version_dir.name
+                    datasets[dataset_name] = full_path
                 except ValueError:
                     # 如果无法计算相对路径，使用绝对路径名
                     datasets[rel_path.name] = full_path
@@ -186,10 +303,10 @@ def discover_datasets_recursive(version_dir: Path) -> Dict[str, Path]:
 
 def get_scheme_stats(precision_file: Path, scheme: str) -> Optional[PrecisionStatistics]:
     """
-    从精度文件中提取特定方案的统计数据
+    从位置精度文件中提取特定方案的统计数据
 
     Args:
-        precision_file: 精度文件路径
+        precision_file: 位置精度文件路径
         scheme: 方案名称 (pvtlc, rtklc, pvttc, rtktc)
 
     Returns:
@@ -203,7 +320,30 @@ def get_scheme_stats(precision_file: Path, scheme: str) -> Optional[PrecisionSta
             return all_stats[stat_key]
         return None
     except Exception as e:
-        print(f"  [警告] 解析文件失败 {precision_file}: {e}")
+        print(f"  [警告] 解析位置精度文件失败 {precision_file}: {e}")
+        return None
+
+
+def get_velocity_scheme_stats(velocity_file: Path, scheme: str) -> Optional[VelocityStatistics]:
+    """
+    从速度精度文件中提取特定方案的统计数据
+
+    Args:
+        velocity_file: 速度精度文件路径
+        scheme: 方案名称 (pvtlc, rtklc, pvttc, rtktc)
+
+    Returns:
+        统计数据，如果不存在返回None
+    """
+    try:
+        all_stats = parse_velocity_file(str(velocity_file))
+        # 根据方案类型选择 lc 或 tc
+        stat_key = 'lc' if 'pvtlc' in scheme or 'pvttc' in scheme else 'tc'
+        if stat_key in all_stats:
+            return all_stats[stat_key]
+        return None
+    except Exception as e:
+        print(f"  [警告] 解析速度精度文件失败 {velocity_file}: {e}")
         return None
 
 
@@ -337,28 +477,18 @@ def create_output_directory(output_base_dir: Path, version_a_label: str, version
     return output_dir
 
 
-def compare_versions(
-    version_a_dir: Path,
-    version_b_dir: Path,
+def compare_position_precision(
+    datasets_a: Dict[str, Path],
+    datasets_b: Dict[str, Path],
     version_a_label: str,
     version_b_label: str,
     compare_schemes: List[str],
     compare_metrics: List[str],
     compare_scenes: List[str],
-    verbose: bool
+    common_datasets: List[str]
 ) -> Tuple[str, str]:
     """
-    对比两个版本的精度
-
-    Args:
-        version_a_dir: 版本A目录
-        version_b_dir: 版本B目录
-        version_a_label: 版本A标签
-        version_b_label: 版本B标签
-        compare_schemes: 要对比的方案列表（空列表表示全部）
-        compare_metrics: 要对比的指标列表（空列表表示全部）
-        compare_scenes: 要对比的场景列表（空列表表示全部）
-        verbose: 是否显示详细输出
+    对比位置精度
 
     Returns:
         (终端输出报告, 文件输出报告)
@@ -366,68 +496,28 @@ def compare_versions(
     terminal_output = []
     file_output = []
 
-    # 发现数据集（递归）
-    datasets_a = discover_datasets_recursive(version_a_dir)
-    datasets_b = discover_datasets_recursive(version_b_dir)
+    # 输出位置精度对比标题
+    header = []
+    header.append("=" * 120)
+    header.append("位置精度对比报告")
+    header.append("=" * 120)
+    header.append("")
+    header.append(f"对比方案: {', '.join(compare_schemes)}")
+    header.append(f"对比指标: {', '.join(compare_metrics) if compare_metrics else '全部指标'}")
+    header.append(f"对比场景: {', '.join(compare_scenes) if compare_scenes else '全部场景'}")
+    header.append("")
+    header.append("=" * 120)
+    header.append("")
 
-    # 找出共同数据集
-    common_datasets = sorted(set(datasets_a.keys()) & set(datasets_b.keys()))
-    only_a_datasets = sorted(set(datasets_a.keys()) - set(datasets_b.keys()))
-    only_b_datasets = sorted(set(datasets_b.keys()) - set(datasets_a.keys()))
+    terminal_output.extend(header)
+    file_output.extend(header)
 
-    # 如果没有指定方案，从共同数据集中检测可用方案
-    if not compare_schemes:
-        # 合并两个版本的数据集来检测方案
-        all_datasets = {**datasets_a, **datasets_b}
-        compare_schemes = get_available_schemes_from_files(all_datasets)
-        if not compare_schemes:
-            compare_schemes = ['pvtlc', 'rtklc']  # 默认值
-
-    # 输出基本信息
-    header_lines = []
-    header_lines.append("=" * 120)
-    header_lines.append("融合定位版本对比报告")
-    header_lines.append("=" * 120)
-    header_lines.append("")
-    header_lines.append(f"版本A: {version_a_label} ({version_a_dir})")
-    header_lines.append(f"版本B: {version_b_label} ({version_b_dir})")
-    header_lines.append(f"对比方案: {', '.join(compare_schemes)}")
-    header_lines.append(f"对比指标: {', '.join(compare_metrics) if compare_metrics else '全部指标'}")
-    header_lines.append("")
-    header_lines.append(f"共同数据集 ({len(common_datasets)}个):")
-    for ds in common_datasets[:10]:  # 只显示前10个
-        header_lines.append(f"  - {ds}")
-    if len(common_datasets) > 10:
-        header_lines.append(f"  ... 等共 {len(common_datasets)} 个数据集")
-    if only_a_datasets:
-        header_lines.append(f"")
-        header_lines.append(f"版本A独有 ({len(only_a_datasets)}个):")
-        for ds in only_a_datasets[:5]:
-            header_lines.append(f"  - {ds}")
-        if len(only_a_datasets) > 5:
-            header_lines.append(f"  ... 等共 {len(only_a_datasets)} 个")
-    if only_b_datasets:
-        header_lines.append(f"")
-        header_lines.append(f"版本B独有 ({len(only_b_datasets)}个):")
-        for ds in only_b_datasets[:5]:
-            header_lines.append(f"  - {ds}")
-        if len(only_b_datasets) > 5:
-            header_lines.append(f"  ... 等共 {len(only_b_datasets)} 个")
-    header_lines.append("")
-    header_lines.append("=" * 120)
-    header_lines.append("")
-
-    terminal_output.extend(header_lines)
-    file_output.extend(header_lines)
-
-    # 缺失说明收集
     missing_notes = []
 
-    # 对比每个方案
     for scheme in compare_schemes:
         scheme_header = []
         scheme_header.append("=" * 120)
-        scheme_header.append(f"{scheme} 方案对比")
+        scheme_header.append(f"{scheme} 方案位置精度对比")
         scheme_header.append("=" * 120)
         scheme_header.append("")
         scheme_header.append("注: 较小的数值（较好性能）以粗体显示")
@@ -436,26 +526,20 @@ def compare_versions(
         terminal_output.extend(scheme_header)
         file_output.extend(scheme_header)
 
-        # 获取共同数据集字典
         common_datasets_dict = {k: datasets_a[k] for k in common_datasets if k in datasets_a}
 
-        # 使用局部变量，避免覆盖传入参数
-        # 如果没有指定场景，从共同数据集中检测可用场景
         scenes_to_compare = compare_scenes if compare_scenes else get_available_scenes_from_files(common_datasets_dict, scheme)
         if not scenes_to_compare:
-            scenes_to_compare = ['全部', '正常']  # 默认值
+            scenes_to_compare = ['全部', '正常']
 
-        # 如果没有指定指标，从共同数据集中检测可用指标
         metrics_to_compare = compare_metrics if compare_metrics else get_available_metrics_from_files(common_datasets_dict, scheme)
         if not metrics_to_compare:
-            metrics_to_compare = ['H-rms', 'H-CEP95', 'H-CEP99', 'H-max']  # 默认值
+            metrics_to_compare = ['H-rms', 'H-CEP95', 'H-CEP99', 'H-max']
 
-        # 对比每个场景
         for scene in scenes_to_compare:
             scene_header = []
             scene_header.append(f"--- {scene} 场景 ---")
             scene_header.append("")
-            # 动态调整列宽以适应较长的数据集路径
             max_dataset_len = max(len(ds) for ds in common_datasets) if common_datasets else 15
             dataset_col_width = max(max_dataset_len, 15)
             header_fmt = f"{{dataset:<{dataset_col_width}}} | {{metric:<10}} | {{version_a:>12}} | {{version_b:>12}}"
@@ -474,27 +558,24 @@ def compare_versions(
                 stats_b = get_scheme_stats(precision_file_b, scheme)
 
                 if not stats_a or not stats_b:
-                    missing_notes.append(f"{dataset}/{scheme}: 缺少{scheme}方案结果")
+                    missing_notes.append(f"{dataset}/{scheme}: 缺少位置精度方案结果")
                     continue
 
-                # 获取场景数据
                 scene_data_a = stats_a.scenes.get(scene)
                 scene_data_b = stats_b.scenes.get(scene)
 
                 if not scene_data_a or not scene_data_b:
-                    missing_notes.append(f"{dataset}/{scheme}/{scene}: 缺少场景数据")
+                    missing_notes.append(f"{dataset}/{scheme}/{scene}: 缺少位置精度场景数据")
                     continue
 
-                # 对比每个指标（使用已检测或配置的指标列表）
                 for metric in metrics_to_compare:
                     value_a = scene_data_a.metrics.get(metric, 0.0)
                     value_b = scene_data_b.metrics.get(metric, 0.0)
 
-                    # 较小的值为较好（加粗显示）
+                    # 较小的数值（较好性能）用粗体显示
                     is_a_better = value_a < value_b
                     is_b_better = value_b < value_a
 
-                    # 格式化输出 - 较小的数值（较好的性能）用粗体
                     formatted_a_terminal = format_bold(value_a, is_a_better, use_terminal=True)
                     formatted_b_terminal = format_bold(value_b, is_b_better, use_terminal=True)
                     formatted_a_file = format_bold(value_a, is_a_better, use_terminal=False)
@@ -517,14 +598,13 @@ def compare_versions(
             terminal_output.append("")
             file_output.append("")
 
-    # 输出缺失说明
     if missing_notes:
         missing_section = []
         missing_section.append("=" * 120)
-        missing_section.append("缺失说明")
+        missing_section.append("位置精度缺失说明")
         missing_section.append("=" * 120)
         missing_section.append("")
-        for note in missing_notes[:50]:  # 限制显示数量
+        for note in missing_notes[:50]:
             missing_section.append(f"  - {note}")
         if len(missing_notes) > 50:
             missing_section.append(f"  ... 等共 {len(missing_notes)} 条缺失说明")
@@ -534,12 +614,247 @@ def compare_versions(
 
     footer = []
     footer.append("=" * 120)
-    footer.append("对比完成")
+    footer.append("位置精度对比完成")
     footer.append("=" * 120)
     terminal_output.extend(footer)
     file_output.extend(footer)
 
     return "\n".join(terminal_output), "\n".join(file_output)
+
+
+def compare_velocity_precision(
+    velocity_datasets_a: Dict[str, Path],
+    velocity_datasets_b: Dict[str, Path],
+    version_a_label: str,
+    version_b_label: str,
+    compare_schemes: List[str],
+    compare_scenes: List[str],
+    common_datasets: List[str]
+) -> Tuple[str, str]:
+    """
+    对比速度精度
+
+    Returns:
+        (终端输出报告, 文件输出报告)
+    """
+    terminal_output = []
+    file_output = []
+
+    header = []
+    header.append("=" * 120)
+    header.append("速度精度对比报告")
+    header.append("=" * 120)
+    header.append("")
+    header.append(f"对比方案: {', '.join(compare_schemes)}")
+    header.append(f"速度指标: RMS, CEP50, CEP95, CEP99, Max")
+    header.append(f"对比场景: {', '.join(compare_scenes) if compare_scenes else '全部场景'}")
+    header.append(f"单位: m/s")
+    header.append("")
+    header.append("=" * 120)
+    header.append("")
+
+    terminal_output.extend(header)
+    file_output.extend(header)
+
+    missing_notes = []
+    velocity_metrics = VelocityStatisticsData.METRICS_VELOCITY
+
+    for scheme in compare_schemes:
+        scheme_header = []
+        scheme_header.append("=" * 120)
+        scheme_header.append(f"{scheme} 方案速度精度对比")
+        scheme_header.append("=" * 120)
+        scheme_header.append("")
+        scheme_header.append("注: 较小的数值（较好性能）以粗体显示")
+        scheme_header.append("")
+
+        terminal_output.extend(scheme_header)
+        file_output.extend(scheme_header)
+
+        # 获取场景列表
+        scenes_to_compare = compare_scenes if compare_scenes else SCENE_ORDER
+        scenes_to_compare = [sc for sc in scenes_to_compare if sc in SCENE_ORDER]
+
+        for scene in scenes_to_compare:
+            scene_header = []
+            scene_header.append(f"--- {scene} 场景 ---")
+            scene_header.append("")
+            max_dataset_len = max(len(ds) for ds in common_datasets) if common_datasets else 15
+            dataset_col_width = max(max_dataset_len, 15)
+            header_fmt = f"{{dataset:<{dataset_col_width}}} | {{metric:<10}} | {{version_a:>12}} | {{version_b:>12}}"
+            scene_header.append(header_fmt.format(dataset='数据集', metric='指标',
+                                                  version_a=version_a_label, version_b=version_b_label))
+            scene_header.append("-" * (dataset_col_width + 35))
+
+            terminal_output.extend(scene_header)
+            file_output.extend(scene_header)
+
+            for dataset in common_datasets:
+                if dataset not in velocity_datasets_a or dataset not in velocity_datasets_b:
+                    missing_notes.append(f"{dataset}/{scheme}: 缺少速度精度文件")
+                    continue
+
+                velocity_file_a = velocity_datasets_a[dataset]
+                velocity_file_b = velocity_datasets_b[dataset]
+
+                stats_a = get_velocity_scheme_stats(velocity_file_a, scheme)
+                stats_b = get_velocity_scheme_stats(velocity_file_b, scheme)
+
+                if not stats_a or not stats_b:
+                    missing_notes.append(f"{dataset}/{scheme}: 缺少速度精度方案结果")
+                    continue
+
+                scene_data_a = stats_a.scenes.get(scene)
+                scene_data_b = stats_b.scenes.get(scene)
+
+                if not scene_data_a or not scene_data_b:
+                    missing_notes.append(f"{dataset}/{scheme}/{scene}: 缺少速度精度场景数据")
+                    continue
+
+                for metric in velocity_metrics:
+                    value_a = scene_data_a.metrics.get(metric, 0.0)
+                    value_b = scene_data_b.metrics.get(metric, 0.0)
+
+                    # 较小的数值（较好性能）用粗体显示
+                    is_a_better = value_a < value_b
+                    is_b_better = value_b < value_a
+
+                    formatted_a_terminal = format_bold(value_a, is_a_better, use_terminal=True)
+                    formatted_b_terminal = format_bold(value_b, is_b_better, use_terminal=True)
+                    formatted_a_file = format_bold(value_a, is_a_better, use_terminal=False)
+                    formatted_b_file = format_bold(value_b, is_b_better, use_terminal=False)
+
+                    row_fmt_terminal = f"{{dataset:<{dataset_col_width}}} | {{metric:<10}} | {{value_a:>12}} | {{value_b:>12}}"
+                    row_fmt_file = f"{{dataset:<{dataset_col_width}}} | {{metric:<10}} | {{value_a:>16}} | {{value_b:>16}}"
+
+                    terminal_output.append(row_fmt_terminal.format(
+                        dataset=dataset, metric=metric,
+                        value_a=formatted_a_terminal, value_b=formatted_b_terminal))
+                    file_output.append(row_fmt_file.format(
+                        dataset=dataset, metric=metric,
+                        value_a=formatted_a_file, value_b=formatted_b_file))
+
+            terminal_output.append("")
+            file_output.append("")
+            terminal_output.append("-" * 120)
+            file_output.append("-" * 120)
+            terminal_output.append("")
+            file_output.append("")
+
+    if missing_notes:
+        missing_section = []
+        missing_section.append("=" * 120)
+        missing_section.append("速度精度缺失说明")
+        missing_section.append("=" * 120)
+        missing_section.append("")
+        for note in missing_notes[:50]:
+            missing_section.append(f"  - {note}")
+        if len(missing_notes) > 50:
+            missing_section.append(f"  ... 等共 {len(missing_notes)} 条缺失说明")
+        missing_section.append("")
+        terminal_output.extend(missing_section)
+        file_output.extend(missing_section)
+
+    footer = []
+    footer.append("=" * 120)
+    footer.append("速度精度对比完成")
+    footer.append("=" * 120)
+    terminal_output.extend(footer)
+    file_output.extend(footer)
+
+    return "\n".join(terminal_output), "\n".join(file_output)
+
+
+def compare_versions(
+    version_a_dir: Path,
+    version_b_dir: Path,
+    version_a_label: str,
+    version_b_label: str,
+    compare_schemes: List[str],
+    compare_metrics: List[str],
+    compare_scenes: List[str],
+    verbose: bool
+) -> Tuple[Tuple[str, str], Tuple[str, str], Tuple[str, str]]:
+    """
+    对比两个版本的精度（位置+速度）
+
+    Returns:
+        ((位置终端报告, 位置文件报告), (速度终端报告, 速度文件报告), (合并终端报告, 合并文件报告))
+    """
+    # 发现位置精度数据集
+    pos_datasets_a = discover_datasets_recursive(version_a_dir, 'position')
+    pos_datasets_b = discover_datasets_recursive(version_b_dir, 'position')
+
+    # 发现速度精度数据集
+    vel_datasets_a = discover_datasets_recursive(version_a_dir, 'velocity')
+    vel_datasets_b = discover_datasets_recursive(version_b_dir, 'velocity')
+
+    # 找出共同数据集（使用位置精度数据集作为基准）
+    common_datasets = sorted(set(pos_datasets_a.keys()) & set(pos_datasets_b.keys()))
+    only_a_datasets = sorted(set(pos_datasets_a.keys()) - set(pos_datasets_b.keys()))
+    only_b_datasets = sorted(set(pos_datasets_b.keys()) - set(pos_datasets_a.keys()))
+
+    # 如果没有指定方案，检测可用方案
+    if not compare_schemes:
+        all_datasets = {**pos_datasets_a, **pos_datasets_b}
+        compare_schemes = get_available_schemes_from_files(all_datasets)
+        if not compare_schemes:
+            compare_schemes = ['pvtlc', 'rtklc']
+
+    # 生成基本信息头部（用于合并报告）
+    info_header = []
+    info_header.append("=" * 120)
+    info_header.append("融合定位版本对比报告")
+    info_header.append("=" * 120)
+    info_header.append("")
+    info_header.append(f"版本A: {version_a_label} ({version_a_dir})")
+    info_header.append(f"版本B: {version_b_label} ({version_b_dir})")
+    info_header.append(f"对比方案: {', '.join(compare_schemes)}")
+    info_header.append("")
+    info_header.append(f"共同数据集 ({len(common_datasets)}个):")
+    for ds in common_datasets[:10]:
+        info_header.append(f"  - {ds}")
+    if len(common_datasets) > 10:
+        info_header.append(f"  ... 等共 {len(common_datasets)} 个数据集")
+    if only_a_datasets:
+        info_header.append("")
+        info_header.append(f"版本A独有 ({len(only_a_datasets)}个):")
+        for ds in only_a_datasets[:5]:
+            info_header.append(f"  - {ds}")
+        if len(only_a_datasets) > 5:
+            info_header.append(f"  ... 等共 {len(only_a_datasets)} 个")
+    if only_b_datasets:
+        info_header.append("")
+        info_header.append(f"版本B独有 ({len(only_b_datasets)}个):")
+        for ds in only_b_datasets[:5]:
+            info_header.append(f"  - {ds}")
+        if len(only_b_datasets) > 5:
+            info_header.append(f"  ... 等共 {len(only_b_datasets)} 个")
+    info_header.append("")
+    info_header.append("=" * 120)
+    info_header.append("")
+
+    # 生成位置精度对比报告
+    pos_terminal, pos_file = compare_position_precision(
+        pos_datasets_a, pos_datasets_b,
+        version_a_label, version_b_label,
+        compare_schemes, compare_metrics, compare_scenes,
+        common_datasets
+    )
+
+    # 生成速度精度对比报告
+    vel_terminal, vel_file = compare_velocity_precision(
+        vel_datasets_a, vel_datasets_b,
+        version_a_label, version_b_label,
+        compare_schemes, compare_scenes,
+        common_datasets
+    )
+
+    # 生成合并报告
+    combined_terminal = "\n".join(info_header) + "\n" + pos_terminal + "\n\n" + vel_terminal
+    combined_file = "\n".join(info_header) + "\n" + pos_file + "\n\n" + vel_file
+
+    return (pos_terminal, pos_file), (vel_terminal, vel_file), (combined_terminal, combined_file)
 
 
 def main():
@@ -623,12 +938,14 @@ def main():
 
     # 创建输出目录
     output_dir = create_output_directory(output_base_dir, version_a_label, version_b_label)
-    output_file = output_dir / "version_comparison_report.txt"
+    position_report_file = output_dir / "position_comparison_report.txt"
+    velocity_report_file = output_dir / "velocity_comparison_report.txt"
+    combined_report_file = output_dir / "version_comparison_report.txt"
 
     print(f"[信息] 输出目录: {output_dir}")
 
-    # 执行对比
-    terminal_report, file_report = compare_versions(
+    # 执行对比（返回三个报告）
+    (pos_term, pos_file), (vel_term, vel_file), (combined_term, combined_file) = compare_versions(
         version_a_dir,
         version_b_dir,
         version_a_label,
@@ -639,13 +956,21 @@ def main():
         verbose
     )
 
-    # 输出报告（终端）
-    print(terminal_report)
+    # 输出合并报告到终端
+    print(combined_term)
 
-    # 保存到文件
-    with open(output_file, 'w', encoding='utf-8') as f:
-        f.write(file_report)
-    print(f"\n报告已保存到: {output_file}")
+    # 保存三个报告文件
+    with open(position_report_file, 'w', encoding='utf-8') as f:
+        f.write(pos_file)
+    print(f"\n位置对比报告已保存到: {position_report_file}")
+
+    with open(velocity_report_file, 'w', encoding='utf-8') as f:
+        f.write(vel_file)
+    print(f"速度对比报告已保存到: {velocity_report_file}")
+
+    with open(combined_report_file, 'w', encoding='utf-8') as f:
+        f.write(combined_file)
+    print(f"合并报告已保存到: {combined_report_file}")
 
     return 0
 
